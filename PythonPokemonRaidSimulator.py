@@ -4,7 +4,7 @@ import random, copy
 
 # Pokemon Classes
 class PokemonMove:
-    def __init__(self, name, power, type_name, accuracy, pp, is_special):
+    def __init__(self, name, power, type_name, accuracy, pp, is_special, StatusMove=False, status_effect=None, effect_chance=0, move_priority=0, move_category=None, move_target=None):
         self.name = name
         self.power = power
         self.type = type_name
@@ -12,6 +12,12 @@ class PokemonMove:
         self.pp = pp
         self.max_pp = pp
         self.is_special = is_special
+        self.StatusMove = StatusMove
+        self.status_effect = status_effect
+        self.effect_chance = effect_chance
+        self.move_priority = move_priority
+        self.move_category = move_category
+        self.move_target = move_target
 
 class TypeChart:
     effectiveness = {
@@ -39,8 +45,26 @@ class TypeChart:
     def get_effectiveness(move_type, target_type):
         return TypeChart.effectiveness.get(move_type, {}).get(target_type, 1.0)
 
+    StatusEffects = ["Burn", "Freeze", "Paralysis", "Poison", "Sleep", "Confusion"]
+    Burn = "Burn"
+    Freeze = "Freeze"
+    Paralysis = "Paralysis"
+    Poison = "Poison"
+    BadlyPoison = "BadlyPoison"
+    Sleep = "Sleep"
+    Confusion = "Confusion"
+
+    BurnEffect = {"attack": 0.5}
+    ParalysisEffect = {"speed": 0.5, "chance_to_skip": 0.25}
+    PoisonEffect = {"hp_loss_per_turn": 1/8}
+    poision_increment = 1
+    BadlyPoisonEffect = {"hp_loss_per_turn": poision_increment/16}
+    FreezeEffect = {"chance_to_thaw": 0.2}
+    SleepEffect = {"min_turns": 1, "max_turns": 3}
+    ConfusionEffect = {"chance_to_hurt_self": 0.5, "min_turns": 1, "max_turns": 4}
+    
 class Pokemon:
-    def __init__(self, name, type_name, hp, attack, special_attack, defense, special_defense, speed, moves):
+    def __init__(self, name, type_name, hp, attack, special_attack, defense, special_defense, speed, moves, ability=None, item=None, status=None, status_duration=0, stat_stages=None):
         self.name = name
         self.type = type_name
         self.level = 50
@@ -52,6 +76,11 @@ class Pokemon:
         self.special_defense = special_defense
         self.speed = speed
         self.moves = moves
+        self.ability = ability
+        self.item = item
+        self.status = status
+        self.status_duration = status_duration
+        self.stat_stages = stat_stages if stat_stages else {"attack": 0, "defense": 0, "special_attack": 0, "special_defense": 0, "speed": 0, "accuracy": 0, "evasion": 0}
 
     #Check if fainted, by seeing if hp is 0 or less.
     def is_fainted(self):
@@ -61,13 +90,27 @@ class Pokemon:
     def calculate_damage(self, move, defender):
         if move.pp <= 0:
             return 0, 1.0
-        if random.randint(1,100) > move.accuracy:
+        if random.randint(1, 100) > move.accuracy:
             return 0, 1.0
-        attack_stat = self.special_attack if move.is_special else self.attack
-        defense_stat = defender.special_defense if move.is_special else defender.defense
+
+        # Stat stage multipliers (Gen 8)
+        def stage_multiplier(stage):
+            if stage >= 0:
+                return (2 + stage) / 2
+            else:
+                return 2 / (2 - stage)
+
+        # Apply stat stages
+        if move.is_special:
+            attack_stat = self.special_attack * stage_multiplier(self.stat_stages.get("special_attack", 0))
+            defense_stat = defender.special_defense * stage_multiplier(defender.stat_stages.get("special_defense", 0))
+        else:
+            attack_stat = self.attack * stage_multiplier(self.stat_stages.get("attack", 0))
+            defense_stat = defender.defense * stage_multiplier(defender.stat_stages.get("defense", 0))
+
         effectiveness = TypeChart.get_effectiveness(move.type, defender.type)
         stab = 1.5 if move.type == self.type else 1.0
-        damage = int(((2*self.level/5+2)*move.power*(attack_stat/defense_stat)/50+2)*effectiveness*stab)
+        damage = int(((2 * self.level / 5 + 2) * move.power * (attack_stat / defense_stat) / 50 + 2) * effectiveness * stab)
         if effectiveness == 0:
             damage = 0
         else:
@@ -259,7 +302,7 @@ class BattleGUI:
         self.choose_frame.destroy()
         self.update_battle_ui()
 
-    #Doea any and all updates to  the UI during battle
+    #Does any and all updates to  the UI during battle
     def update_battle_ui(self):
         for widget in self.master.winfo_children():
             if widget not in [self.log_frame]:
@@ -283,8 +326,15 @@ class BattleGUI:
             messagebox.showinfo("No PP", f"{move.name} has no PP left!")
             return
 
-        player_speed = self.player_active.speed
-        ai_speed = self.ai_active.speed
+        # Apply stat stage multipliers for speed (Gen 8)
+        def stage_multiplier(stage):
+            if stage >= 0:
+                return (2 + stage) / 2
+            else:
+                return 2 / (2 - stage)
+
+        player_speed = self.player_active.speed * stage_multiplier(self.player_active.stat_stages.get("speed", 0))
+        ai_speed = self.ai_active.speed * stage_multiplier(self.ai_active.stat_stages.get("speed", 0))
 
         # Speed comparison: player goes first, tie 50/50
         if player_speed > ai_speed or (player_speed == ai_speed and random.choice([True, False])):
