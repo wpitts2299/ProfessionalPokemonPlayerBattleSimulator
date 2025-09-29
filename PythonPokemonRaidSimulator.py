@@ -43,7 +43,14 @@ class TypeChart:
 
     @staticmethod
     def get_effectiveness(move_type, target_type):
-        return TypeChart.effectiveness.get(move_type, {}).get(target_type, 1.0)
+        # Accepts target_type as a string (single type) or a tuple/list (dual type)
+        if isinstance(target_type, (tuple, list)):
+            multiplier = 1.0
+            for t in target_type:
+                multiplier *= TypeChart.effectiveness.get(move_type, {}).get(t, 1.0)
+            return multiplier
+        else:
+            return TypeChart.effectiveness.get(move_type, {}).get(target_type, 1.0)
 
     StatusEffects = ["Burn", "Freeze", "Paralysis", "Poison", "Sleep", "Confusion"]
     Burn = "Burn"
