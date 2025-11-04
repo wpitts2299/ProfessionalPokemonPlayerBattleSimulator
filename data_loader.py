@@ -46,8 +46,7 @@ class Move:
         except Exception:
             self.pp = 10
         self.max_pp = self.pp
-        cat = (category or ("special" if is_special else "physical"))
-        self.category = str(cat).strip().lower()
+        self.category = category or ("special" if is_special else "physical")
         self.is_special = (self.category == "special")
         try:
             self.priority = int(priority) if priority is not None else 0
@@ -200,9 +199,7 @@ def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_mov
             pp = int(row.get('pp') or 10)
         except Exception:
             pp = 10
-        category = (row.get('category') or ("special" if row.get('is_special', False) else "physical"))
-        if isinstance(category, str):
-            category = category.strip().lower()
+        category = row.get('category') or ("special" if row.get('is_special', False) else "physical")
         effect = row.get('effect') if 'effect' in row.index else None
         mv = Move(mname, power, mtype, accuracy, pp, category, category == "special", effect=effect)
 
