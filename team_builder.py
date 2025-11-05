@@ -15,6 +15,7 @@ from data_loader import (
     Pokemon,
 )
 from data_loader import _lookup_move_in_db  # use CSV-backed move details
+from data_loader import _select_moves_with_setup  # ensure AI rosters include setup options
 from pikalytics_util import fetch_details
 
  
@@ -144,78 +145,30 @@ def _choose_moves_for_pokemon_advanced(
         pika_names = []
 
     if pika_names:
+        # Use Pikalytics move frequency first, then CSV candidates to fill gaps.
         ordered: List[Move] = []
-        # 1) Create CSV-enriched moves for all Pikalytics names
         for nm in pika_names:
             mv = _lookup_move_in_db(nm, moves_df)
-            if mv and mv.name not in [m.name for m in ordered]:
+            if mv:
                 ordered.append(mv)
-            if len(ordered) >= MAX_MOVES_PER_MON:
-                break
-        # 2) Fill remaining with per-Pokémon candidates if any
-        for m in candidate_moves:
-            if len(ordered) >= MAX_MOVES_PER_MON:
-                break
-            if m.name not in [x.name for x in ordered]:
-                ordered.append(m)
-        if ordered:
-            return ordered[:MAX_MOVES_PER_MON]
+        ordered.extend(candidate_moves)
+        selected = _select_moves_with_setup(ordered, max_moves=MAX_MOVES_PER_MON)
+        if selected:
+            return selected
 
-    # If we have no per-Pokémon mapping, keep any moves assigned during creation (which already used fallbacks)
     if not candidate_moves:
         return pkm.moves if getattr(pkm, "moves", None) else [Move("Tackle", 40, "Normal", 100, 35, "physical")]
 
-    # Build ordered list from candidate CSV moves when Pikalytics data isn't available
-    ordered: List[Move] = list(candidate_moves)
+    # Fall back to CSV data entirely when Pikalytics is unavailable.
+    ordered = list(candidate_moves)
+    selected = _select_moves_with_setup(ordered, max_moves=MAX_MOVES_PER_MON)
+    if selected:
+        return selected
 
-    # Heuristic selection to fill 4 moves
-    final: List[Move] = []
-    stab_moves = [m for m in ordered if any(m.type == t for t in pkm.type)]
-    if stab_moves:
-        final.append(stab_moves[0])
-    if len(final) < 2 and len(stab_moves) > 1:
-        final.append(stab_moves[1])
-
-    coverage_pool = [m for m in ordered if m.name not in [mv.name for mv in final] and (m.type not in pkm.type)]
-    if coverage_pool:
-        final.append(coverage_pool[0])
-
-    idx = 0
-    while len(final) < MAX_MOVES_PER_MON and idx < len(ordered):
-        mv = ordered[idx]
-        if mv.name not in [m.name for m in final]:
-            final.append(mv)
-        idx += 1
-
-    while len(final) < MAX_MOVES_PER_MON:
-        final.append(Move("Tackle", 40, "Normal", 100, 35, "physical"))
-
-    # Prefer a utility/status move as 4th if we have STAB + coverage
-    stab_count = sum(1 for m in final if any(m.type == t for t in pkm.type))
-    if stab_count >= 1:
-        for m in ordered:
-            ml = str(m.name).lower()
-            if m.name not in [x.name for x in final] and any(kw in ml for kw in UTILITY_KEYWORDS):
-                weakest_idx = None
-                weakest_power = float("inf")
-                for i, fm in enumerate(final):
-                    if not any(fm.type == t for t in pkm.type):
-                        if fm.power < weakest_power:
-                            weakest_power = fm.power
-                            weakest_idx = i
-                if weakest_idx is None:
-                    weakest_idx = len(final) - 1
-                final[weakest_idx] = m
-                break
-
-    # Ensure unique and exactly MAX_MOVES_PER_MON
-    unique: List[Move] = []
-    for m in final:
-        if m.name not in [u.name for u in unique]:
-            unique.append(m)
-        if len(unique) >= MAX_MOVES_PER_MON:
-            break
-    return unique[:MAX_MOVES_PER_MON]
+    fallback = pkm.moves if getattr(pkm, "moves", None) else []
+    if fallback:
+        return fallback[:MAX_MOVES_PER_MON]
+    return [Move("Tackle", 40, "Normal", 100, 35, "physical")]
 
 
  

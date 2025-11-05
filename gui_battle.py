@@ -1,3 +1,5 @@
+"""Simple Tkinter interface for running battles and building teams."""
+
 try:
     import tkinter as tk
     from tkinter import ttk
@@ -81,6 +83,7 @@ class BattleGUI(tk.Tk):
         # Controls
         ctrl = ttk.Frame(root)
         ctrl.grid(row=4, column=0, sticky="ew", padx=10, pady=6)
+        # Custom team builder lets the player define exact roster and item style.
         ttk.Button(ctrl, text="Build Team", command=self._open_team_builder).pack(side=tk.LEFT)
         ttk.Button(ctrl, text="New Battle", command=self._new_battle).pack(side=tk.LEFT, padx=(8,0))
         ttk.Button(ctrl, text="Quit", command=self.destroy).pack(side=tk.RIGHT)

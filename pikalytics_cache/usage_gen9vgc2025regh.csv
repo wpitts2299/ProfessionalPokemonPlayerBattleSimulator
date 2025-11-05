@@ -42,7 +42,9 @@ Araquanid,0.35,True
 Arbok,0.0,False
 Arboliva,0.08,True
 Arcanine,0.16,True
+Arcanine-Hisui,5.39,True
 Arceus,0.0,False
+Archaludon,33.17,True
 Archen,0.0,False
 Archeops,0.0,False
 Arctibax,0.0,False
@@ -59,6 +61,7 @@ Ash Greninja,0.0,False
 Audino,0.0,False
 Aurorus,0.0,False
 Avalugg,0.01,False
+Avalugg-Hisui,0.01,False
 Axew,0.0,False
 Azelf,0.0,False
 Azumarill,0.15,True
@@ -69,8 +72,11 @@ Banette,0.0,False
 Barbaracle,0.0,False
 Barboach,0.0,False
 Barraskewda,0.1,True
+Basculegion,15.49,True
 Basculegion Felame,0.0,False
 Basculegion Male,0.0,False
+Basculegion-F,0.05,True
+Basculin,0.02,False
 Basculin Blue Stripe,0.0,False
 Basculin Red Stripe,0.0,False
 Bastiodon,0.01,False
@@ -107,6 +113,7 @@ Braixen,0.0,False
 Brambleghast,0.14,True
 Bramblin,0.0,False
 Braviary,0.06,True
+Braviary-Hisui,0.28,True
 Breloom,0.2,True
 Brionne,0.0,False
 Bronzong,0.38,True
@@ -224,7 +231,9 @@ Dartrix,0.0,False
 Darumaka,0.0,False
 Dawn Wings Necrozma,0.0,False
 Decidueye,0.02,False
+Decidueye-Hisui,0.49,True
 Dedenne,0.0,False
+Deerling,0.0,False
 Deerling Autumn Form,0.0,False
 Deerling Spring Form,0.0,False
 Deerling Summer Form,0.0,False
@@ -246,6 +255,7 @@ Dialga Origin Form,0.0,False
 Diancie,0.0,False
 Diggersby,0.0,False
 Diglett,0.0,False
+Dipplin,0.02,False
 Ditto,0.03,False
 Dodrio,0.01,False
 Doduo,0.0,False
@@ -274,9 +284,11 @@ Drowzee,0.0,False
 Druddigon,0.0,False
 Dubwool,0.0,False
 Ducklett,0.0,False
+Dudunsparce,0.1,True
 Dudunsparce Three-Segment Form,0.0,False
 Dudunsparce Two-Segment Form,0.0,False
 Dugtrio,0.03,False
+Dugtrio-Alola,0.0,False
 Dunsparce,0.0,False
 Duosion,0.0,False
 Duraludon,0.02,False
@@ -290,6 +302,7 @@ Dwebble,0.0,False
 Eelektrik,0.0,False
 Eelektross,0.01,False
 Eevee,0.0,False
+Eiscue,0.03,False
 Eiscue Ice Face,0.0,False
 Eiscue Noice Face,0.0,False
 Ekans,0.0,False
@@ -298,6 +311,7 @@ Electabuzz,5.41,True
 Electivire,0.03,False
 Electrike,0.0,False
 Electrode,0.0,False
+Electrode-Hisui,0.46,True
 Elekid,0.0,False
 Elgyem,0.0,False
 Emboar,0.03,False
@@ -315,6 +329,7 @@ Eternatus,0.0,False
 Excadrill,2.84,True
 Exeggcute,0.0,False
 Exeggutor,0.33,True
+Exeggutor-Alola,0.06,True
 Exploud,0.0,False
 Falinks,0.02,False
 Fan Rotom,0.0,False
@@ -385,11 +400,13 @@ Garchomp,8.6,True
 Gardevoir,0.29,True
 Garganacl,1.85,True
 Gastly,0.0,False
+Gastrodon,0.75,True
 Gastrodon East-Sea Form,0.0,False
 Gastrodon West-Sea Form,0.0,False
 Genesect,0.0,False
 Gengar,0.4,True
 Geodude,0.0,False
+Geodude-Alola,0.0,False
 Gholdengo,43.84,True
 Gible,0.0,False
 Gigalith,0.0,False
@@ -412,10 +429,12 @@ Golbat,0.0,False
 Goldeen,0.0,False
 Golduck,0.08,True
 Golem,0.0,False
+Golem-Alola,0.07,True
 Golett,0.0,False
 Golisopod,0.0,False
 Golurk,0.02,False
 Goodra,0.03,False
+Goodra-Hisui,0.15,True
 Goomy,0.0,False
 Gorebyss,0.0,False
 Gossifleur,0.0,False
@@ -430,17 +449,20 @@ Grafaiai,0.03,False
 Granbull,0.0,False
 Grapploct,0.0,False
 Graveler,0.0,False
+Graveler-Alola,0.0,False
 Great Tusk,0.0,False
 Greavard,0.0,False
 Greedent,0.0,False
 Greninja,0.3,True
 Grimer,0.0,False
+Grimer-Alola,0.0,False
 Grimmsnarl,4.49,True
 Grookey,0.0,False
 Grotle,0.0,False
 Groudon,0.0,False
 Grovyle,0.0,False
 Growlithe,0.0,False
+Growlithe-Hisui,0.0,False
 Grubbin,0.0,False
 Grumpig,0.01,False
 Gulpin,0.0,False
@@ -496,14 +518,17 @@ Houndoom,0.04,False
 Houndour,0.0,False
 Houndstone,0.09,True
 Huntail,0.0,False
+Hydrapple,0.1,True
 Hydreigon,2.84,True
 Hypno,0.0,False
 Igglybuff,0.0,False
 Illumise,0.1,True
 Impidimp,0.0,False
 Incineroar,30.84,True
+Indeedee,10.5,True
 Indeedee Female,0.0,False
 Indeedee Male,0.0,False
+Indeedee-F,6.63,True
 Infernape,0.03,False
 Inkay,0.0,False
 Inteleon,0.06,True
@@ -577,6 +602,7 @@ Lickitung,0.0,False
 Liepard,0.0,False
 Lileep,0.0,False
 Lilligant,0.03,False
+Lilligant-Hisui,1.21,True
 Lillipup,0.0,False
 Linoone,0.0,False
 Litleo,0.0,False
@@ -597,9 +623,12 @@ Lurantis,0.02,False
 Luvdisc,0.02,False
 Luxio,0.0,False
 Luxray,0.01,False
+Lycanroc,0.67,True
 Lycanroc Dusk Form,0.0,False
 Lycanroc Midday Form,0.0,False
 Lycanroc Midnight Form,0.0,False
+Lycanroc-Dusk,0.0,False
+Lycanroc-Midnight,0.0,False
 Mabosstiff,0.0,False
 Machamp,0.0,False
 Machoke,0.0,False
@@ -631,6 +660,7 @@ Marshadow,0.0,False
 Marshtomp,0.0,False
 Maschiff,0.0,False
 Masquerain,0.01,False
+Maushold,12.1,True
 Maushold Family of Four,0.0,False
 Maushold Family of Three,0.0,False
 Mawile,0.0,False
@@ -690,9 +720,12 @@ Meloetta Aria Form,0.0,False
 Meloetta Pirouette Form,0.0,False
 Meltan,0.0,False
 Meowscarada,0.94,True
+Meowstic,0.04,False
 Meowstic Female,0.0,False
 Meowstic Male,0.0,False
 Meowth,0.0,False
+Meowth-Alola,0.0,False
+Meowth-Galar,0.0,False
 Mesprit,0.0,False
 Metagross,0.43,True
 Metang,0.0,False
@@ -708,6 +741,7 @@ Miltank,0.0,False
 Mime Jr.,0.0,False
 Mimikyu,0.72,True
 Minccino,0.0,False
+Minior,0.01,False
 Minior Blue Core,0.0,False
 Minior Green Core,0.0,False
 Minior Indigo Core,0.0,False
@@ -724,6 +758,7 @@ Moltres,0.0,False
 Monferno,0.0,False
 Morelull,0.0,False
 Morgrem,0.02,False
+Morpeko,0.0,False
 Morpeko Full Berry Mode,0.0,False
 Morpeko Hangry Mode,0.0,False
 Mothim,0.0,False
@@ -734,6 +769,7 @@ Mudbray,0.0,False
 Mudkip,0.0,False
 Mudsdale,0.05,True
 Muk,0.0,False
+Muk-Alola,0.08,True
 Munchlax,0.0,False
 Munna,0.0,False
 Murkrow,3.72,True
@@ -753,6 +789,7 @@ Nidorino,0.0,False
 Nihilego,0.0,False
 Nincada,0.0,False
 Ninetales,0.4,True
+Ninetales-Alola,14.93,True
 Ninjask,0.0,False
 Noctowl,0.0,False
 Noibat,0.0,False
@@ -765,19 +802,25 @@ Obstagoon,0.0,False
 Octillery,0.0,False
 Oddish,0.0,False
 Oinkologne,0.0,False
+Oinkologne-F,0.0,False
 Omanyte,0.0,False
 Omastar,0.0,False
 Onix,0.0,False
 Oranguru,0.39,True
 Orbeetle,0.0,False
+Oricorio,0.0,False
 Oricorio Baile Style,0.0,False
 Oricorio Pa'u Style,0.0,False
 Oricorio Pom-Pom Style,0.0,False
 Oricorio Sensu Style,0.0,False
+Oricorio-Pa'u,0.0,False
+Oricorio-Pom-Pom,0.12,True
+Oricorio-Sensu,0.31,True
 Orthworm,0.19,True
 Oshawott,0.01,False
 Overqwil,0.11,True
 Pachirisu,0.03,False
+Palafin,0.94,True
 Palafin Hero Form,0.0,False
 Palafin Zero Form,0.0,False
 Paldean Tauros Aqua Breed,0.0,False
@@ -804,6 +847,7 @@ Pawniard,0.0,False
 Pelipper,20.76,True
 Perrserker,0.14,True
 Persian,0.0,False
+Persian-Alola,0.09,True
 Petilil,0.0,False
 Phanpy,0.0,False
 Phantump,0.01,False
@@ -828,6 +872,7 @@ Politoed,2.45,True
 Poliwag,0.0,False
 Poliwhirl,0.0,False
 Poliwrath,0.07,True
+Poltchageist,0.0,False
 Polteageist,0.01,False
 Ponyta,0.0,False
 Poochyena,0.0,False
@@ -858,9 +903,11 @@ Quaxwell,0.0,False
 Quilava,0.0,False
 Quilladin,0.0,False
 Qwilfish,0.0,False
+Qwilfish-Hisui,0.01,False
 Raboot,0.0,False
 Rabsca,0.12,True
 Raichu,0.15,True
+Raichu-Alola,0.01,False
 Raikou,0.0,False
 Ralts,0.0,False
 Rampardos,0.03,False
@@ -888,12 +935,18 @@ Rillaboom,29.47,True
 Riolu,0.01,False
 Roaring Moon,0.0,False
 Rockruff,0.0,False
+Rockruff-Dusk,0.0,False
 Roggenrola,0.0,False
 Rolycoly,0.0,False
 Rookidee,0.0,False
 Roselia,0.0,False
 Roserade,0.0,False
 Rotom,0.0,False
+Rotom-Fan,0.0,False
+Rotom-Frost,0.05,True
+Rotom-Heat,0.18,True
+Rotom-Mow,0.02,False
+Rotom-Wash,0.14,True
 Rowlet,0.0,False
 Rufflet,0.0,False
 Runerigus,0.0,False
@@ -902,10 +955,13 @@ Salamence,1.07,True
 Salandit,0.0,False
 Salazzle,0.01,False
 Samurott,0.0,False
+Samurott-Hisui,0.39,True
 Sandaconda,0.0,False
 Sandile,0.0,False
 Sandshrew,0.0,False
+Sandshrew-Alola,0.0,False
 Sandslash,0.0,False
+Sandslash-Alola,0.01,False
 Sandy Shocks,0.0,False
 Sandygast,0.0,False
 Sawk,0.0,False
@@ -937,6 +993,7 @@ Shaymin Sky Form,0.0,False
 Shedinja,0.0,False
 Shelgon,0.0,False
 Shellder,0.0,False
+Shellos,0.0,False
 Shellos East-Sea Form,0.0,False
 Shellos West-Sea Form,0.0,False
 Shelmet,0.0,False
@@ -955,6 +1012,7 @@ Silvally,0.0,False
 Simipour,0.0,False
 Simisage,0.0,False
 Simisear,0.0,False
+Sinistcha,7.61,True
 Sinistea,0.0,False
 Sirfetch'd,0.0,False
 Sizzlipede,0.0,False
@@ -970,16 +1028,21 @@ Skwovet,0.0,False
 Slaking,2.27,True
 Slakoth,0.0,False
 Sliggoo,0.0,False
+Sliggoo-Hisui,0.0,False
 Slither Wing,0.0,False
 Slowbro,0.04,False
+Slowbro-Galar,0.01,False
 Slowking,0.04,False
+Slowking-Galar,0.03,False
 Slowpoke,0.02,False
+Slowpoke-Galar,0.0,False
 Slugma,0.0,False
 Slurpuff,0.0,False
 Smeargle,0.86,True
 Smoliv,0.0,False
 Smoochum,0.0,False
 Sneasel,0.0,False
+Sneasel-Hisui,0.01,False
 Sneasler,27.47,True
 Snivy,0.0,False
 Snom,0.0,False
@@ -1002,6 +1065,7 @@ Spiritomb,0.12,True
 Spoink,0.0,False
 Sprigatito,0.0,False
 Spritzee,0.0,False
+Squawkabilly,0.02,False
 Squawkabilly Blue Plumage,0.0,False
 Squawkabilly Green Plumage,0.0,False
 Squawkabilly White Plumage,0.0,False
@@ -1047,10 +1111,14 @@ Tapu Fini,0.0,False
 Tapu Koko,0.0,False
 Tapu Lele,0.0,False
 Tarountula,0.0,False
+Tatsugiri,9.87,True
 Tatsugiri Curly Form,0.0,False
 Tatsugiri Droopy Form,0.0,False
 Tatsugiri Stretchy Form,0.0,False
 Tauros,0.01,False
+Tauros-Paldea-Aqua,0.98,True
+Tauros-Paldea-Blaze,0.4,True
+Tauros-Paldea-Combat,0.0,False
 Teddiursa,0.0,False
 Tentacool,0.0,False
 Tentacruel,0.01,False
@@ -1084,6 +1152,7 @@ Toucannon,0.01,False
 Toxapex,0.04,False
 Toxel,0.0,False
 Toxicroak,0.04,False
+Toxtricity,0.23,True
 Toxtricity Amped Form,0.0,False
 Toxtricity Low-Key Form,0.0,False
 Tranquill,0.0,False
@@ -1100,6 +1169,7 @@ Tympole,0.0,False
 Tynamo,0.0,False
 Type: Null,0.0,False
 Typhlosion,0.07,True
+Typhlosion-Hisui,2.99,True
 Tyranitar,9.6,True
 Tyrantrum,0.0,False
 Tyrogue,0.0,False
@@ -1110,6 +1180,7 @@ Unbound Hoopa,0.0,False
 Unfezant,0.0,False
 Unown,0.0,False
 Ursaluna,9.49,True
+Ursaluna-Bloodmoon,34.91,True
 Ursaring,0.01,False
 Urshifu Rapid Strike Style,0.0,False
 Urshifu Single Strike Style,0.0,False
@@ -1137,8 +1208,10 @@ Volbeat,0.07,True
 Volcanion,0.0,False
 Volcarona,11.19,True
 Voltorb,0.0,False
+Voltorb-Hisui,0.0,False
 Vullaby,0.0,False
 Vulpix,0.0,False
+Vulpix-Alola,0.0,False
 Wailmer,0.0,False
 Wailord,0.0,False
 Walking Wake,0.0,False
@@ -1151,6 +1224,7 @@ Weavile,1.76,True
 Weedle,0.0,False
 Weepinbell,0.0,False
 Weezing,2.53,True
+Weezing-Galar,1.28,True
 Whimsicott,11.66,True
 Whirlipede,0.0,False
 Whiscash,0.0,False
@@ -1167,6 +1241,7 @@ Wobbuffet,0.0,False
 Woobat,0.0,False
 Wooloo,0.0,False
 Wooper,0.0,False
+Wooper-Paldea,0.0,False
 Wormadam Plant Form,0.0,False
 Wormadam Sandy Form,0.0,False
 Wormadam Trash Form,0.0,False
@@ -1195,7 +1270,9 @@ Zekrom,0.0,False
 Zeraora,0.0,False
 Zigzagoon,0.0,False
 Zoroark,0.0,False
+Zoroark-Hisui,1.51,True
 Zorua,0.0,False
+Zorua-Hisui,0.0,False
 Zubat,0.0,False
 Zweilous,0.0,False
 Zygarde 10% Form,0.0,False

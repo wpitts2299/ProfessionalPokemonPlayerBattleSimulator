@@ -25,6 +25,33 @@ import pandas as pd
 CACHE_DIR = "pikalytics_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# Common keywords used to detect setup/utility moves in Pikalytics data.
+SETUP_MOVE_KEYWORDS = [
+    "swords dance",
+    "calm mind",
+    "nasty plot",
+    "bulk up",
+    "dragon dance",
+    "shell smash",
+    "quiver dance",
+    "agility",
+    "tailwind",
+    "trick room",
+    "iron defense",
+    "acid armor",
+    "rock polish",
+    "curse",
+    "coaching",
+    "belly drum",
+    "autotomize",
+    "work up",
+    "howl",
+    "spicy extract",
+    "chilly reception",
+    "double team",
+    "substitute",
+]
+
 
  
 class Move:
@@ -228,7 +255,48 @@ def _resolve_stats_row(name: str, stats_df: pd.DataFrame) -> Tuple[Optional[pd.S
     return None, None, None, None
 
 
- 
+def _is_setup_move(move_name: str) -> bool:
+    """Return True when the move name matches a known setup/support pattern."""
+    ml = str(move_name or "").lower()
+    return any(keyword in ml for keyword in SETUP_MOVE_KEYWORDS)
+
+
+def _select_moves_with_setup(candidate_moves: List[Move], max_moves: int = 4) -> List[Move]:
+    """Select a move set prioritising the most common options and one setup move."""
+    unique_moves: List[Move] = []
+    seen_names: List[str] = []
+    for mv in candidate_moves:
+        if not isinstance(mv, Move):
+            continue
+        if mv.name in seen_names:
+            continue
+        unique_moves.append(mv)
+        seen_names.append(mv.name)
+        if len(unique_moves) >= max_moves:
+            break
+
+    if not unique_moves:
+        return []
+
+    if len(unique_moves) < max_moves:
+        return unique_moves
+
+    def is_status(move: Move) -> bool:
+        return str(getattr(move, "category", "")).lower() == "status"
+
+    chosen = unique_moves[:max_moves]
+    if all(not is_status(mv) for mv in chosen):
+        # Swap the lowest priority move for a setup move when possible so the AI
+        # has at least one non-attacking option for stat boosts or support.
+        for mv in candidate_moves:
+            if mv.name in seen_names:
+                continue
+            if is_status(mv) and _is_setup_move(mv.name):
+                chosen[-1] = mv
+                break
+    return chosen[:max_moves]
+
+
 def _lookup_move_in_db(move_name: str, moves_df: pd.DataFrame) -> Optional[Move]:
     """Lookup a move by name in a global move DB and construct a Move."""
     if not move_name or moves_df is None or moves_df.empty:
@@ -273,6 +341,7 @@ def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_mov
     """
     # Use either a per-Pokémon move mapping or global DB + Pikalytics fallback
     # Prefer Pikalytics-tracked moves first, then enrich from CSV
+    # Pikalytics detail pages provide the most reliable ordering, so try them first.
     try:
         from pikalytics_util import fetch_details  # lazy import
         det = fetch_details(pokemon_name)
@@ -280,15 +349,16 @@ def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_mov
         det = None
     if isinstance(det, dict):
         names = [nm for nm, _ in det.get('moves', [])]
-        picked: List[Move] = []
+        pika_moves: List[Move] = []
         for nm in names:
             mv = _lookup_move_in_db(nm, moves_df)
-            if mv and mv.name not in [m.name for m in picked]:
-                picked.append(mv)
-                if len(picked) >= max_moves:
-                    break
-        if picked:
-            return picked
+            if mv:
+                pika_moves.append(mv)
+            if len(pika_moves) >= max_moves + 4:
+                break
+        selected = _select_moves_with_setup(pika_moves, max_moves=max_moves)
+        if selected:
+            return selected
 
     subset = None
     if 'pokemon' in moves_df.columns:
@@ -361,51 +431,25 @@ def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_mov
         else:
             filler.append(mv)
 
-    chosen = []
-
-    # Add 1–2 strong STAB moves (later filtered by actual pokemon types in create_pokemon_from_name)
-    for mv in sorted(stab, key=lambda m: m.power, reverse=True):
-        if len(chosen) >= 2:
-            break
-        if mv.name not in [c.name for c in chosen]:
-            chosen.append(mv)
-
-    # Add a filler/coverage move if available
-    if len(chosen) < 3:
-        for mv in filler:
-            if mv.name not in [c.name for c in chosen]:
-                chosen.append(mv)
-                break
-
-    # Add a setup move if it makes sense
-    if setup and len(chosen) < max_moves:
-        chosen.append(setup[0])
-
-    # Fill to max_moves
-    idx = 0
-    while len(chosen) < max_moves and idx < len(filler):
-        mv = filler[idx]
-        if mv.name not in [c.name for c in chosen]:
-            chosen.append(mv)
-        idx += 1
-
-    return chosen[:max_moves]
+    stab_sorted = sorted(stab, key=lambda m: m.power, reverse=True)
+    ordered_candidates = stab_sorted + filler + setup
+    return _select_moves_with_setup(ordered_candidates, max_moves=max_moves)
 
 
 def create_pokemon_from_name(name: str, stats_df: pd.DataFrame, moves_df: pd.DataFrame, abilities_df: pd.DataFrame,
                              level: int = 50, preferred_item: Optional[str] = None):
     """Create a Pokemon instance from CSV rows (defensive about column names)."""
-    original_query = name
-    row, resolved_name, matched_col, match_score = _resolve_stats_row(name, stats_df)
+    original_query = str(name)
+    row, resolved_name, matched_col, match_score = _resolve_stats_row(original_query, stats_df)
     if row is None:
-        raise ValueError(f"Pokemon '{name}' not found in stats CSV.")
+        raise ValueError(f"Pokemon '{original_query}' not found in stats CSV.")
     if resolved_name and resolved_name.lower() != original_query.lower():
         try:
             score_disp = f" ({match_score:.2f})" if match_score is not None else ""
         except Exception:
             score_disp = ""
         print(f"Matched '{original_query}' to '{resolved_name}'{score_disp} via {matched_col or 'fuzzy match'}.")
-    name = resolved_name or original_query
+    canonical_name = resolved_name or original_query
 
     # tolerate different column names for types & stats
     t1 = row.get('type1') or row.get('type_1') or row.get('type') or row.get('type_1')
@@ -442,10 +486,20 @@ def create_pokemon_from_name(name: str, stats_df: pd.DataFrame, moves_df: pd.Dat
     speed = get_stat('speed', 'spe', default=50)
 
     # choose moves with heuristics
-    moves = _choose_moves_for_pokemon(name, moves_df, max_moves=4)
+    # Fetch moves using the original player input so we respect forms like "Ursaluna-Bloodmoon".
+    moves = _choose_moves_for_pokemon(original_query, moves_df, max_moves=4)
+    if len(moves) < 4 and canonical_name.lower() != original_query.lower():
+        # If the direct lookup fails, retry with the resolved canonical name to
+        # catch entries that only exist in the CSV under the base form.
+        alt_moves = _choose_moves_for_pokemon(canonical_name, moves_df, max_moves=4)
+        for mv in alt_moves:
+            if mv.name not in [m.name for m in moves]:
+                moves.append(mv)
+            if len(moves) >= 4:
+                break
     if len(moves) < 4:
         # try again with looser heuristics
-        extra = _choose_moves_for_pokemon(name, moves_df, max_moves=6)
+        extra = _choose_moves_for_pokemon(original_query, moves_df, max_moves=6)
         for mv in extra:
             if len(moves) >= 4:
                 break
@@ -457,7 +511,7 @@ def create_pokemon_from_name(name: str, stats_df: pd.DataFrame, moves_df: pd.Dat
     # 1) Try Pikalytics usage top ability
     try:
         from pikalytics_util import fetch_details  # type: ignore
-        det = fetch_details(name)
+        det = fetch_details(original_query)
         if isinstance(det, dict):
             alst = det.get('abilities', []) or []
             if alst:
@@ -492,7 +546,8 @@ def create_pokemon_from_name(name: str, stats_df: pd.DataFrame, moves_df: pd.Dat
 
     # item selection
     item = preferred_item
-    return Pokemon(name, types, hp, atk, spatk, defense, spdef, speed, moves, ability, item, level)
+    display_name = original_query if original_query else canonical_name
+    return Pokemon(display_name, types, hp, atk, spatk, defense, spdef, speed, moves, ability, item, level)
 
 
  

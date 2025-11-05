@@ -27,6 +27,21 @@ from pikalytics_util import (
 )
 
 
+def _unique(seq: Iterable[str]) -> List[str]:
+    seen: Set[str] = set()
+    out: List[str] = []
+    for item in seq:
+        key = str(item)
+        if key not in seen:
+            seen.add(key)
+            out.append(str(item))
+    return out
+
+
+def _normalize_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-")
+
+
 def generate_compendium(
     format_slug: str,
     min_usage: float,
@@ -77,6 +92,7 @@ def load_stats_names(path: str) -> List[str]:
         text = str(val).strip()
         if text:
             names.append(text)
+    names = _unique(names)
     names.sort()
     return names
 
@@ -90,8 +106,11 @@ def write_usage_report(
     """Write a CSV summarizing usage for the provided names."""
     rows = []
     lower_map = {k.lower(): v for k, v in usage_map.items()}
+    slug_map = {_normalize_name(k): v for k, v in usage_map.items()}
     for name in names:
         usage = lower_map.get(name.lower())
+        if usage is None:
+            usage = slug_map.get(_normalize_name(name))
         rows.append({
             "pokemon": name,
             "usage": float(usage) if usage is not None else 0.0,
@@ -209,6 +228,19 @@ def main(argv: List[str] | None = None) -> int:
             stats_names = None
     elif args.stats_csv and args.stats_csv != "pokemon.csv":
         print(f"Warning: stats CSV '{args.stats_csv}' not found; skipping usage report.")
+
+    if stats_names:
+        slugged_stats: Set[str] = {_normalize_name(n) for n in stats_names}
+        added = False
+        for usage_name in usage_map.keys():
+            slug = _normalize_name(usage_name)
+            if slug not in slugged_stats:
+                stats_names.append(usage_name)
+                slugged_stats.add(slug)
+                added = True
+        if added:
+            stats_names = _unique(stats_names)
+            stats_names.sort()
 
     detail_names = stats_names or list(usage_map.keys())
     if detail_names and not args.skip_details:
