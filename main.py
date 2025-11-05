@@ -78,24 +78,32 @@ def run_cli_battle():
     stats_df, moves_df, abilities_df = load_local_data()
     print("Loaded data.")
 
-    # Restrict AI pool to >=0.5% usage in Pikalytics (format gen9vgc2025regh)
+    # Restrict AI pool to >=2.5% usage in Pikalytics (format gen9vgc2025regh)
     # Prefer CSV compendium if available; else try HTML cache/fetch.
     allowed = set()
     try:
         from pikalytics_util import load_compendium_single_csv, load_compendium_csv, CACHE_DIR
         import os
-        single_csv = os.path.join(CACHE_DIR, "compendium_gen9vgc2025regh.csv")
+        fmt = "gen9vgc2025regh"
+        single_csv = os.path.join(CACHE_DIR, f"compendium_{fmt}.csv")
         if os.path.exists(single_csv):
-            comp = load_compendium_single_csv("gen9vgc2025regh")
-            allowed = {name for name, data in comp.get("pokemon", {}).items() if data.get("usage", 0) >= 0.5}
-        elif os.path.exists(os.path.join(CACHE_DIR, "compendium_gen9vgc2025regh_overview.csv")):
-            comp = load_compendium_csv("gen9vgc2025regh")
-            allowed = {name for name, data in comp.get("pokemon", {}).items() if data.get("usage", 0) >= 0.5}
+            comp = load_compendium_single_csv(fmt)
+            allowed = {name for name, data in comp.get("pokemon", {}).items() if data.get("usage", 0) >= 2.5}
+        elif os.path.exists(os.path.join(CACHE_DIR, f"compendium_{fmt}_overview.csv")):
+            comp = load_compendium_csv(fmt)
+            allowed = {name for name, data in comp.get("pokemon", {}).items() if data.get("usage", 0) >= 2.5}
         else:
-            overview = fetch_overview("gen9vgc2025regh")
-            allowed = {name for name, usage in overview if usage >= 0.5}
+            overview = fetch_overview(fmt)
+            allowed = {name for name, usage in overview if usage >= 2.5}
     except Exception:
         allowed = set()
+    # Map to exact stat names for filtering
+    try:
+        stats_names = [str(n) for n in stats_df["pokemon"].unique()]
+        allowed_lc = {n.lower() for n in allowed}
+        allowed = {n for n in stats_names if n.lower() in allowed_lc}
+    except Exception:
+        pass
     ai_team = generate_balanced_team(
         stats_df, moves_df, abilities_df, n=6, item_style="aggressive",
         allowed_names=(allowed if allowed else None)

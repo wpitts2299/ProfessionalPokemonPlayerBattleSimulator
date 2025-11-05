@@ -19,6 +19,7 @@ import re
 from typing import Dict, List, Tuple, Optional
 import json
 import csv
+from datetime import datetime
 
 import pandas as pd
 try:
@@ -48,6 +49,136 @@ def _read_text(path: str) -> Optional[str]:
             return f.read()
     except Exception:
         return None
+
+
+def _unique(seq):
+    seen = set()
+    out = []
+    for item in seq:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _cache_json(path: str, payload: Dict[str, object]) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+    except Exception:
+        pass
+
+
+def _load_cached_json(path: str) -> Optional[Dict[str, object]]:
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+        # allow list payload saved directly
+        return {"data": data}
+    except Exception:
+        return None
+
+
+def _month_candidates(months_back: int = 24) -> List[str]:
+    now = datetime.utcnow()
+    year = now.year
+    month = now.month
+    candidates: List[str] = []
+    for _ in range(max(1, months_back)):
+        candidates.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month <= 0:
+            month = 12
+            year -= 1
+    # include known historical defaults just in case
+    for fallback in ("2025-09", "2025-08", "2025-07", "2024-12"):
+        if fallback not in candidates:
+            candidates.append(fallback)
+    return candidates
+
+
+def _fetch_overview_via_api(format_slug: str, html: Optional[str], use_cache: bool) -> List[Tuple[str, float]]:
+    if requests is None:
+        return []
+
+    cache_file = os.path.join(CACHE_DIR, f"overview_api_{format_slug}.json")
+    if use_cache:
+        cached = _load_cached_json(cache_file)
+        if cached and cached.get("data"):
+            try:
+                return [
+                    (str(entry.get("name", "")).strip(), float(str(entry.get("percent", 0)).replace("%", "")))
+                    for entry in cached.get("data", [])
+                    if str(entry.get("name", "")).strip()
+                ]
+            except Exception:
+                pass
+
+    key_candidates: List[str] = []
+    if html:
+        key_candidates.extend(re.findall(r'value="(%s-[0-9]+)"' % re.escape(format_slug), html, re.I))
+        m_attr = re.search(r'data-format="(%s-[^"]+)"' % re.escape(format_slug), html, re.I)
+        if m_attr:
+            key_candidates.append(m_attr.group(1))
+    key_candidates.extend([
+        f"{format_slug}-1760",
+        f"{format_slug}-1630",
+        f"{format_slug}-1500",
+        format_slug,
+    ])
+    key_candidates = _unique(key_candidates)
+
+    date_candidates: List[str] = []
+    if use_cache and os.path.exists(cache_file):
+        cached = _load_cached_json(cache_file)
+        if cached:
+            hint = str(cached.get("date") or "").strip()
+            if hint:
+                date_candidates.append(hint)
+    date_candidates.extend(_month_candidates())
+    date_candidates = _unique(date_candidates)
+
+    for date_str in date_candidates:
+        for key in key_candidates:
+            url = f"https://www.pikalytics.com/api/l/{date_str}/{key}"
+            try:
+                resp = requests.get(url, timeout=10)
+            except Exception:
+                continue
+            if resp.status_code != 200:
+                continue
+            try:
+                payload = resp.json()
+            except Exception:
+                continue
+            if not isinstance(payload, list) or not payload:
+                continue
+            try:
+                results: List[Tuple[str, float]] = []
+                for entry in payload:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = str(entry.get("name", "")).strip()
+                    if not name:
+                        continue
+                    raw_pct = entry.get("percent")
+                    try:
+                        usage = float(str(raw_pct).replace("%", "").strip())
+                    except Exception:
+                        usage = 0.0
+                    results.append((name, usage))
+                if not results:
+                    continue
+                if use_cache:
+                    _cache_json(cache_file, {"date": date_str, "key": key, "data": payload})
+                return results
+            except Exception:
+                continue
+    return []
 
 
 def fetch_overview(format_slug: str = "gen9vgc2025regh", use_cache: bool = True) -> List[Tuple[str, float]]:
@@ -115,6 +246,10 @@ def fetch_overview(format_slug: str = "gen9vgc2025regh", use_cache: bool = True)
 
     if best:
         return best
+
+    api_results = _fetch_overview_via_api(format_slug, html, use_cache)
+    if api_results:
+        return api_results
 
     # JSON fallback: Next.js __NEXT_DATA__ embedded payload
     try:

@@ -11,10 +11,11 @@ from typing import List, Dict, Optional, Set
 
 from data_loader import (
     create_pokemon_from_name,
-    fetch_pikalytics,
     Move,
     Pokemon,
 )
+from data_loader import _lookup_move_in_db  # use CSV-backed move details
+from pikalytics_util import fetch_details
 
  
 AGGRESSIVE_ITEMS = ["Choice Band", "Choice Specs", "Life Orb", "Expert Belt", "Choice Scarf"]
@@ -73,6 +74,9 @@ Team = List[Pokemon]
 
  
 def _moves_from_moves_df_for_pokemon(name: str, moves_df, prefer_setup: bool = False) -> List[Move]:
+    # If moves_df is a global move database without per-Pokémon mapping, return empty
+    if "pokemon" not in moves_df.columns:
+        return []
     subset = moves_df[moves_df["pokemon"].str.lower() == name.lower()]
     if subset.empty:
         return []
@@ -132,33 +136,37 @@ def _choose_moves_for_pokemon_advanced(
     name = pkm.name
     candidate_moves = _moves_from_moves_df_for_pokemon(name, moves_df, prefer_setup=False)
 
-    # Attempt to use pikalytics usage ordering if available
-    pikalytics_moves: List[str] = []
-    if use_pikalytics:
-        try:
-            data = fetch_pikalytics(name)
-            if data and isinstance(data, dict):
-                if "tables" in data and data["tables"]:
-                    for table in data["tables"]:
-                        cols = [str(c).lower() for c in table.columns]
-                        mv_col = next((c for c in cols if "move" in c), None)
-                        if mv_col:
-                            orig_col = [c for c in table.columns if str(c).lower() == mv_col][0]
-                            pikalytics_moves = [str(v) for v in table[orig_col].dropna().tolist()]
-                            if pikalytics_moves:
-                                break
-        except Exception:
-            pikalytics_moves = []
+    # Strong preference: Pikalytics-tracked moves in reported order
+    try:
+        det = fetch_details(name)
+        pika_names = [nm for nm, _ in det.get("moves", [])] if isinstance(det, dict) else []
+    except Exception:
+        pika_names = []
 
-    # Build ordered list: pikalytics-preferred then remaining
-    move_by_name = {str(m.name): m for m in candidate_moves}
-    ordered: List[Move] = []
-    for mv_name in pikalytics_moves:
-        if mv_name in move_by_name and mv_name not in [m.name for m in ordered]:
-            ordered.append(move_by_name[mv_name])
-    for m in candidate_moves:
-        if m.name not in [x.name for x in ordered]:
-            ordered.append(m)
+    if pika_names:
+        ordered: List[Move] = []
+        # 1) Create CSV-enriched moves for all Pikalytics names
+        for nm in pika_names:
+            mv = _lookup_move_in_db(nm, moves_df)
+            if mv and mv.name not in [m.name for m in ordered]:
+                ordered.append(mv)
+            if len(ordered) >= MAX_MOVES_PER_MON:
+                break
+        # 2) Fill remaining with per-Pokémon candidates if any
+        for m in candidate_moves:
+            if len(ordered) >= MAX_MOVES_PER_MON:
+                break
+            if m.name not in [x.name for x in ordered]:
+                ordered.append(m)
+        if ordered:
+            return ordered[:MAX_MOVES_PER_MON]
+
+    # If we have no per-Pokémon mapping, keep any moves assigned during creation (which already used fallbacks)
+    if not candidate_moves:
+        return pkm.moves if getattr(pkm, "moves", None) else [Move("Tackle", 40, "Normal", 100, 35, "physical")]
+
+    # Build ordered list from candidate CSV moves when Pikalytics data isn't available
+    ordered: List[Move] = list(candidate_moves)
 
     # Heuristic selection to fill 4 moves
     final: List[Move] = []

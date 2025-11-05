@@ -18,7 +18,8 @@ data_loader.py
 """
 import os
 import time
-from typing import List, Optional
+import difflib
+from typing import List, Optional, Tuple
 import pandas as pd
 
 CACHE_DIR = "pikalytics_cache"
@@ -115,13 +116,28 @@ class Pokemon:
 
 
  
-def load_local_data(stats_path="gen9_pokemon_stats.csv",
-                    moves_path="gen9_pokemon_moves.csv",
-                    abilities_path="gen9_pokemon_abilities.csv"):
+def load_local_data(
+    stats_path: str = "gen9_pokemon_stats.csv",
+    moves_path: str = "gen9_pokemon_moves.csv",
+    abilities_path: str = "gen9_pokemon_abilities.csv",
+):
     """
     Return (stats_df, moves_df, abilities_df).
     Normalizes column names to lowercase.
     """
+    # Prefer provided paths if they exist; else fall back to common alternates in this repo
+    def pick_path(primary: str, fallbacks):
+        if os.path.exists(primary):
+            return primary
+        for p in fallbacks:
+            if os.path.exists(p):
+                return p
+        return primary  # let it raise if truly missing
+
+    stats_path = pick_path(stats_path, ["pokemon.csv"])  # replacement dataset in this repo
+    moves_path = pick_path(moves_path, ["pokemon_moves.csv"])  # global move DB
+    abilities_path = pick_path(abilities_path, ["pokemon_abilities.csv"])  # replacement dataset
+
     stats_df = pd.read_csv(stats_path)
     moves_df = pd.read_csv(moves_path)
     abilities_df = pd.read_csv(abilities_path)
@@ -135,24 +151,118 @@ def load_local_data(stats_path="gen9_pokemon_stats.csv",
     moves_df = norm_cols(moves_df)
     abilities_df = norm_cols(abilities_df)
 
-    # ensure we have a 'pokemon' column for moves/abilities and either 'pokemon' or 'name' for stats
-    # Normalize stats_df to use 'pokemon' column name if it contains 'pokemon' or 'name'
+    # ensure we have a 'pokemon' column for stats/abilities and a 'move' column for moves
     if 'pokemon' not in stats_df.columns and 'name' in stats_df.columns:
         stats_df = stats_df.rename(columns={'name': 'pokemon'})
-    if 'pokemon' not in moves_df.columns and 'name' in moves_df.columns:
-        moves_df = moves_df.rename(columns={'name': 'pokemon'})
     if 'pokemon' not in abilities_df.columns and 'name' in abilities_df.columns:
         abilities_df = abilities_df.rename(columns={'name': 'pokemon'})
+    if 'move' not in moves_df.columns:
+        if 'name' in moves_df.columns:
+            moves_df = moves_df.rename(columns={'name': 'move'})
+        elif 'move_name' in moves_df.columns:
+            moves_df = moves_df.rename(columns={'move_name': 'move'})
 
     # basic sanity
-    for df, label in ((stats_df, "stats"), (moves_df, "moves"), (abilities_df, "abilities")):
-        if 'pokemon' not in df.columns:
-            raise ValueError(f"CSV for {label} must contain a 'pokemon' or 'name' column after normalization.")
+    if 'pokemon' not in stats_df.columns:
+        raise ValueError("Stats CSV must contain a 'pokemon' or 'name' column after normalization.")
+    if 'pokemon' not in abilities_df.columns:
+        # If abilities mapping is not provided, create an empty frame to keep downstream logic simple
+        import pandas as _pd  # avoid shadowing
+        abilities_df = _pd.DataFrame(columns=["pokemon", "ability", "abilities"])  
 
     return stats_df, moves_df, abilities_df
 
 
+def _resolve_stats_row(name: str, stats_df: pd.DataFrame) -> Tuple[Optional[pd.Series], Optional[str], Optional[str], Optional[float]]:
+    """Resolve a Pokémon name to a stats row using exact or fuzzy matching."""
+    if not isinstance(name, str):
+        name = str(name)
+    query = name.strip()
+    if not query:
+        return None, None, None, None
+    query_lower = query.lower()
+
+    candidate_cols = [col for col in ("pokemon", "name", "original_name") if col in stats_df.columns]
+    if not candidate_cols:
+        candidate_cols = list(stats_df.columns)
+
+    # Exact match attempt
+    for col in candidate_cols:
+        series = stats_df[col].dropna().astype(str).str.strip()
+        if series.empty:
+            continue
+        matches = series[series.str.lower() == query_lower]
+        if not matches.empty:
+            idx = matches.index[0]
+            row = stats_df.loc[idx]
+            resolved = str(row.get("pokemon") or matches.iloc[0])
+            return row, resolved, col, 1.0
+
+    # Fuzzy search fallback
+    best_info: Optional[Tuple[pd.Series, str, str, float]] = None
+    for col in candidate_cols:
+        series = stats_df[col].dropna().astype(str).str.strip()
+        if series.empty:
+            continue
+        lower_map = {val.lower(): val for val in series}
+        candidates = list(lower_map.keys())
+        match_list = difflib.get_close_matches(query_lower, candidates, n=1, cutoff=0.72)
+        if not match_list:
+            continue
+        match_lower = match_list[0]
+        score = difflib.SequenceMatcher(None, query_lower, match_lower).ratio()
+        original_val = lower_map[match_lower]
+        match_series = series[series.str.lower() == match_lower]
+        if match_series.empty:
+            continue
+        idx = match_series.index[0]
+        row = stats_df.loc[idx]
+        resolved = str(row.get("pokemon") or original_val)
+        info = (row, resolved, col, score)
+        if best_info is None or score > best_info[3]:
+            best_info = info
+
+    if best_info is not None:
+        return best_info
+
+    return None, None, None, None
+
+
  
+def _lookup_move_in_db(move_name: str, moves_df: pd.DataFrame) -> Optional[Move]:
+    """Lookup a move by name in a global move DB and construct a Move."""
+    if not move_name or moves_df is None or moves_df.empty:
+        return None
+    mdf = moves_df
+    if 'move' not in mdf.columns and 'name' in mdf.columns:
+        mdf = mdf.rename(columns={'name': 'move'})
+    if 'move' not in mdf.columns:
+        return None
+    row = mdf[mdf['move'].astype(str).str.lower() == str(move_name).strip().lower()]
+    if row.empty:
+        return None
+    r = row.iloc[0]
+    mtype = r.get('type') or r.get('move_type') or "Normal"
+    def as_int(val, default):
+        try:
+            v = r.get(val)
+            if v is None or str(v).strip() == "":
+                return default
+            return int(float(v))
+        except Exception:
+            return default
+    power = as_int('power', 0)
+    accuracy = as_int('accuracy', 100)
+    pp = as_int('pp', 10)
+    priority = as_int('priority', 0)
+    category_raw = (r.get('damage_class') or r.get('category') or "physical")
+    category = str(category_raw).strip().lower()
+    effect = r.get('short_descripton') or r.get('short_description') or r.get('effect')
+    cat = "special" if category == "special" else ("status" if category == "status" else "physical")
+    return Move(name=str(move_name), power=power, mtype=str(mtype), accuracy=accuracy, pp=pp,
+                category=cat, is_special=(cat == "special"), priority=priority, effect=effect)
+
+
 def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_moves=4) -> List[Move]:
     """
     Choose up to max_moves for a Pokémon using heuristics:
@@ -161,9 +271,48 @@ def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_mov
       - include setup/status if available
       - fill to 4 moves
     """
-    subset = moves_df[moves_df['pokemon'].str.lower() == pokemon_name.lower()]
-    if subset.empty:
-        # Provide a safe default if no moves are listed
+    # Use either a per-Pokémon move mapping or global DB + Pikalytics fallback
+    # Prefer Pikalytics-tracked moves first, then enrich from CSV
+    try:
+        from pikalytics_util import fetch_details  # lazy import
+        det = fetch_details(pokemon_name)
+    except Exception:
+        det = None
+    if isinstance(det, dict):
+        names = [nm for nm, _ in det.get('moves', [])]
+        picked: List[Move] = []
+        for nm in names:
+            mv = _lookup_move_in_db(nm, moves_df)
+            if mv and mv.name not in [m.name for m in picked]:
+                picked.append(mv)
+                if len(picked) >= max_moves:
+                    break
+        if picked:
+            return picked
+
+    subset = None
+    if 'pokemon' in moves_df.columns:
+        subset = moves_df[moves_df['pokemon'].astype(str).str.lower() == pokemon_name.lower()]
+    if subset is None or subset.empty:
+        # Try Pikalytics for move names, then enrich from global DB
+        move_names: List[str] = []
+        try:
+            from pikalytics_util import fetch_details  # lazy import
+            det = fetch_details(pokemon_name)
+            if isinstance(det, dict):
+                move_names = [nm for nm, _ in det.get('moves', [])]
+        except Exception:
+            move_names = []
+        picked: List[Move] = []
+        for nm in move_names:
+            mv = _lookup_move_in_db(nm, moves_df)
+            if mv and mv.name not in [m.name for m in picked]:
+                picked.append(mv)
+                if len(picked) >= max_moves:
+                    break
+        if picked:
+            return picked
+        # Fallback: safe default if nothing else available
         return [Move(name="Tackle", power=40, mtype="Normal", accuracy=100, pp=35, category="physical", is_special=False)]
 
     subset = subset.copy()
@@ -246,12 +395,17 @@ def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_mov
 def create_pokemon_from_name(name: str, stats_df: pd.DataFrame, moves_df: pd.DataFrame, abilities_df: pd.DataFrame,
                              level: int = 50, preferred_item: Optional[str] = None):
     """Create a Pokemon instance from CSV rows (defensive about column names)."""
-    # Allow stats_df to use 'pokemon' column; try various common names
-    key_col = 'pokemon' if 'pokemon' in stats_df.columns else 'name'
-    row = stats_df[stats_df[key_col].str.lower() == name.lower()]
-    if row.empty:
+    original_query = name
+    row, resolved_name, matched_col, match_score = _resolve_stats_row(name, stats_df)
+    if row is None:
         raise ValueError(f"Pokemon '{name}' not found in stats CSV.")
-    row = row.iloc[0]
+    if resolved_name and resolved_name.lower() != original_query.lower():
+        try:
+            score_disp = f" ({match_score:.2f})" if match_score is not None else ""
+        except Exception:
+            score_disp = ""
+        print(f"Matched '{original_query}' to '{resolved_name}'{score_disp} via {matched_col or 'fuzzy match'}.")
+    name = resolved_name or original_query
 
     # tolerate different column names for types & stats
     t1 = row.get('type1') or row.get('type_1') or row.get('type') or row.get('type_1')
@@ -282,9 +436,9 @@ def create_pokemon_from_name(name: str, stats_df: pd.DataFrame, moves_df: pd.Dat
 
     hp = get_stat('hp', 'base_hp', 'hp_base', default=50)
     atk = get_stat('attack', 'atk', 'base_atk', default=50)
-    spatk = get_stat('special_attack', 'sp_atk', 'spatk', 'spa', default=50)
+    spatk = get_stat('special_attack', 'sp_attack', 'sp_atk', 'spatk', 'spa', default=50)
     defense = get_stat('defense', 'def', 'base_def', default=50)
-    spdef = get_stat('special_defense', 'sp_def', 'spdef', default=50)
+    spdef = get_stat('special_defense', 'sp_defense', 'sp_def', 'spdef', default=50)
     speed = get_stat('speed', 'spe', default=50)
 
     # choose moves with heuristics
@@ -298,13 +452,43 @@ def create_pokemon_from_name(name: str, stats_df: pd.DataFrame, moves_df: pd.Dat
             if mv.name not in [m.name for m in moves]:
                 moves.append(mv)
 
-    # ability retrieval
+    # ability retrieval with fallbacks: Pikalytics -> abilities CSV -> stats CSV
     ability = None
-    if 'pokemon' in abilities_df.columns:
-        ability_row = abilities_df[abilities_df['pokemon'].str.lower() == name.lower()]
-        if not ability_row.empty:
-            # allowances for columns named 'ability' or 'abilities'
-            ability = ability_row.iloc[0].get('ability') or ability_row.iloc[0].get('abilities')
+    # 1) Try Pikalytics usage top ability
+    try:
+        from pikalytics_util import fetch_details  # type: ignore
+        det = fetch_details(name)
+        if isinstance(det, dict):
+            alst = det.get('abilities', []) or []
+            if alst:
+                ability = str(alst[0][0])
+    except Exception:
+        pass
+    # 2) abilities_df row
+    if not ability and 'pokemon' in abilities_df.columns:
+        ab_row = abilities_df[abilities_df['pokemon'].astype(str).str.lower() == name.lower()]
+        if not ab_row.empty:
+            val = ab_row.iloc[0].get('ability') or ab_row.iloc[0].get('abilities')
+            if val is not None:
+                try:
+                    import ast
+                    parsed = val if isinstance(val, list) else ast.literal_eval(str(val))
+                    if isinstance(parsed, list) and parsed:
+                        ability = str(parsed[0])
+                    else:
+                        ability = str(val)
+                except Exception:
+                    ability = str(val)
+    # 3) stats_df ability columns
+    if not ability:
+        if 'ability1' in row.index and pd.notna(row.get('ability1')) and str(row.get('ability1')).strip():
+            ability = str(row.get('ability1'))
+        elif 'ability' in row.index and pd.notna(row.get('ability')) and str(row.get('ability')).strip():
+            ability = str(row.get('ability'))
+        elif 'ability2' in row.index and pd.notna(row.get('ability2')):
+            ability = str(row.get('ability2'))
+        elif 'ability_hidden' in row.index and pd.notna(row.get('ability_hidden')):
+            ability = str(row.get('ability_hidden'))
 
     # item selection
     item = preferred_item
