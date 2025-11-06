@@ -1,19 +1,136 @@
 """Simple Tkinter interface for running battles and building teams."""
 
+import re
+from html import unescape
+from pathlib import Path
+
 try:
     import tkinter as tk
     from tkinter import ttk
 except Exception as e:
     raise ImportError(f"tkinter not available: {e}")
 
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
-from data_loader import load_local_data, create_pokemon_from_name
+from data_loader import load_local_data, create_pokemon_from_name, _lookup_move_in_db, Pokemon
 from team_builder import generate_balanced_team, pick_item
-from pikalytics_util import fetch_overview
+from pikalytics_util import fetch_overview, fetch_details, CACHE_DIR, _slugify
 from battle_ai import BattleAI, BattleState
 
 
+DETAILS_FORMAT = "gen9vgc2025regh"
+
+
+def _load_pikalytics_html(pokemon_name: str, format_slug: str = DETAILS_FORMAT) -> str:
+    slug = _slugify(pokemon_name)
+    cache_path = Path(CACHE_DIR) / f"details_{format_slug}_{slug}.html"
+    if not cache_path.exists():
+        return ""
+    try:
+        return cache_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _extract_moves_from_cache(
+    pokemon_name: str,
+    format_slug: str = DETAILS_FORMAT,
+    html: Optional[str] = None,
+) -> List[Tuple[str, float]]:
+    html = html or _load_pikalytics_html(pokemon_name, format_slug)
+    if not html:
+        return []
+
+    start = html.find('id="moves_wrapper"')
+    if start == -1:
+        return []
+    end_markers = [
+        'id="teammate_wrapper"',
+        'Teammates</span>',
+        'Teammates</div>',
+    ]
+    end = -1
+    for marker in end_markers:
+        end = html.find(marker, start)
+        if end != -1:
+            break
+    if end == -1:
+        end = start + 4000
+    snippet = html[start:end]
+
+    pattern = re.compile(
+        r'<div\s+class="pokedex-move-entry-new">.*?<div[^>]*>(?P<name>[^<]+)</div>.*?<div[^>]*float:right;">\s*(?P<pct>[\d\.]+)%</div>',
+        re.S | re.IGNORECASE,
+    )
+    moves: List[Tuple[str, float]] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(snippet):
+        raw_name = unescape(match.group("name") or "").strip()
+        if not raw_name:
+            continue
+        key = raw_name.lower()
+        if key in seen or key == "other":
+            continue
+        seen.add(key)
+        try:
+            pct = float(match.group("pct") or "0")
+        except Exception:
+            pct = 0.0
+        moves.append((raw_name, pct))
+    return moves
+
+
+def _extract_simple_usage_from_cache(
+    pokemon_name: str,
+    section_id: str,
+    limit: int = 8,
+    format_slug: str = DETAILS_FORMAT,
+    html: Optional[str] = None,
+) -> List[Tuple[str, float]]:
+    html = html or _load_pikalytics_html(pokemon_name, format_slug)
+    if not html:
+        return []
+    match = re.search(rf'<div[^>]+id="{re.escape(section_id)}"[^>]*>', html)
+    if not match:
+        return []
+    start = match.start()
+    snippet = html[start:start + 4000]
+    pattern = re.compile(
+        r'>\s*([^<>]+?)\s*</div>\s*<div[^>]*float:right;">\s*([\d\.]+)%</div>',
+        re.S | re.IGNORECASE,
+    )
+    results: List[Tuple[str, float]] = []
+    seen: set[str] = set()
+    for name, pct in pattern.findall(snippet):
+        clean = unescape(name).strip()
+        key = clean.lower()
+        if not clean or key == "other" or key in seen or not any(ch.isalpha() for ch in clean):
+            continue
+        seen.add(key)
+        try:
+            pct_val = float(pct)
+        except Exception:
+            pct_val = 0.0
+        results.append((clean, pct_val))
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _extract_items_from_cache(
+    pokemon_name: str,
+    format_slug: str = DETAILS_FORMAT,
+    html: Optional[str] = None,
+) -> List[Tuple[str, float]]:
+    return _extract_simple_usage_from_cache(pokemon_name, "items_wrapper", 10, format_slug, html)
+
+
+def _extract_abilities_from_cache(
+    pokemon_name: str,
+    format_slug: str = DETAILS_FORMAT,
+    html: Optional[str] = None,
+) -> List[Tuple[str, float]]:
+    return _extract_simple_usage_from_cache(pokemon_name, "abilities_wrapper", 6, format_slug, html)
 class BattleGUI(tk.Tk):
     """Minimal playable GUI for single-battle turns.
 
@@ -34,6 +151,10 @@ class BattleGUI(tk.Tk):
         # Player custom team settings
         self.custom_player_team_names = []  # type: ignore[var-annotated]
         self.custom_item_style = "balanced"
+        self.custom_player_team_moves: Dict[str, List[str]] = {}
+        self.custom_player_team_abilities: Dict[str, str] = {}
+        self.custom_player_team_items: Dict[str, str] = {}
+        self._bench_lookup: Dict[str, Pokemon] = {}
 
         # UI
         self._build_layout()
@@ -80,9 +201,19 @@ class BattleGUI(tk.Tk):
             self.moves_frame.columnconfigure(i, weight=1)
             self.move_buttons.append(btn)
 
+        # Switch options
+        self.switch_frame = ttk.LabelFrame(root, text="Switch")
+        self.switch_frame.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 6))
+        self.switch_frame.columnconfigure(0, weight=1)
+        self.switch_var = tk.StringVar()
+        self.switch_combo = ttk.Combobox(self.switch_frame, textvariable=self.switch_var, state="disabled", width=28)
+        self.switch_combo.grid(row=0, column=0, sticky="ew", padx=(6, 4), pady=4)
+        self.switch_button = ttk.Button(self.switch_frame, text="Switch", command=self._on_switch, state=tk.DISABLED)
+        self.switch_button.grid(row=0, column=1, sticky="ew", padx=(4, 6), pady=4)
+
         # Controls
         ctrl = ttk.Frame(root)
-        ctrl.grid(row=4, column=0, sticky="ew", padx=10, pady=6)
+        ctrl.grid(row=5, column=0, sticky="ew", padx=10, pady=6)
         # Custom team builder lets the player define exact roster and item style.
         ttk.Button(ctrl, text="Build Team", command=self._open_team_builder).pack(side=tk.LEFT)
         ttk.Button(ctrl, text="New Battle", command=self._new_battle).pack(side=tk.LEFT, padx=(8,0))
@@ -124,11 +255,32 @@ class BattleGUI(tk.Tk):
         )
         # Use custom player team if provided; otherwise generate balanced
         chosen_names = list(self.custom_player_team_names) if self.custom_player_team_names else []
+        custom_moves_map: Dict[str, List[str]] = {name: list(moves)[:4] for name, moves in (self.custom_player_team_moves or {}).items()}
+        custom_ability_map: Dict[str, str] = {name: ability for name, ability in (self.custom_player_team_abilities or {}).items() if ability}
+        custom_item_map: Dict[str, str] = {name: item for name, item in (self.custom_player_team_items or {}).items() if item}
         if chosen_names:
             team = []
             for nm in chosen_names[:6]:
                 try:
                     p = create_pokemon_from_name(nm, self.stats_df, self.moves_df, self.abilities_df, preferred_item=pick_item(self.custom_item_style))
+                    override_names = [mv for mv in custom_moves_map.get(nm, []) if mv]
+                    if override_names:
+                        override_moves = []
+                        seen = set()
+                        for mv_name in override_names:
+                            mv = _lookup_move_in_db(mv_name, self.moves_df)
+                            if mv and mv.name not in seen:
+                                override_moves.append(mv)
+                                seen.add(mv.name)
+                        if override_moves:
+                            existing = [mv for mv in p.moves if mv.name not in seen]
+                            p.moves = (override_moves + existing)[:4]
+                    override_ability = custom_ability_map.get(nm)
+                    if override_ability:
+                        p.ability = override_ability
+                    override_item = custom_item_map.get(nm)
+                    if override_item:
+                        p.item = override_item
                     team.append(p)
                 except Exception:
                     continue
@@ -171,6 +323,24 @@ class BattleGUI(tk.Tk):
         self._refresh_ui()
         self.after(400, self._ai_turn)
 
+    def _on_switch(self):
+        if not self.state:
+            return
+        player = self.state.active_player()
+        ai_p = self.state.active_ai()
+        if not player or not ai_p:
+            return
+        choice = (self.switch_var.get() or "").strip()
+        target = self._bench_lookup.get(choice)
+        if not target or target.is_fainted() or target is player:
+            return
+        action = {"type": "switch", "pokemon": target}
+        wmap = self.ai_engine.get_weather_moves()
+        self.state = self.ai_engine.simulate_action(self.state, attacker=player, defender=ai_p, action=action, weather_moves=wmap)
+        self.msg.set(self.state.last_event or f"You switched to {target.name}.")
+        self._refresh_ui()
+        self.after(400, self._ai_turn)
+
     def _ai_turn(self):
         if not self.state or self.state.is_terminal():
             self._show_outcome()
@@ -206,11 +376,34 @@ class BattleGUI(tk.Tk):
         # Update moves
         for i, btn in enumerate(self.move_buttons):
             if not pl_p or i >= len(pl_p.moves):
-                btn.config(text="—", state=tk.DISABLED)
+                btn.config(text="--", state=tk.DISABLED)
             else:
                 m = pl_p.moves[i]
                 btn.config(text=f"{m.name}\n[{m.type}] pow {m.power}", state=tk.NORMAL)
 
+        # Update switch options
+        bench_entries: List[str] = []
+        self._bench_lookup = {}
+        if self.state and pl_p:
+            for idx, candidate in enumerate(self.state.player_team):
+                if candidate is pl_p or candidate.is_fainted():
+                    continue
+                label = f"{candidate.name} #{idx + 1} (HP {candidate.hp}/{candidate.max_hp})"
+                bench_entries.append(label)
+                self._bench_lookup[label] = candidate
+
+        if bench_entries:
+            self.switch_combo.config(state="readonly", values=bench_entries)
+            if self.switch_var.get() not in bench_entries:
+                choice = bench_entries[0]
+                self.switch_var.set(choice)
+                self.switch_combo.set(choice)
+            self.switch_button.config(state=tk.NORMAL)
+        else:
+            self.switch_var.set("")
+            self.switch_combo.set("")
+            self.switch_combo.config(state="disabled", values=[])
+            self.switch_button.config(state=tk.DISABLED)
     def _set_hp(self, bar: ttk.Progressbar, hp: int, max_hp: int):
         bar.config(maximum=max(1, int(max_hp)))
         bar['value'] = max(0, int(hp))
@@ -229,38 +422,80 @@ class BattleGUI(tk.Tk):
 
     # ---------------- Team Builder ----------------
     def _open_team_builder(self):
-        dlg = TeamBuilderDialog(self, self.stats_df, initial_names=list(self.custom_player_team_names), initial_style=self.custom_item_style)
+        dlg = TeamBuilderDialog(
+            self,
+            self.stats_df,
+            self.moves_df,
+            self.abilities_df,
+            initial_names=list(self.custom_player_team_names),
+            initial_style=self.custom_item_style,
+            initial_moves=dict(self.custom_player_team_moves),
+            initial_abilities=dict(self.custom_player_team_abilities),
+            initial_items=dict(self.custom_player_team_items),
+        )
         self.wait_window(dlg)
         if getattr(dlg, "result", None):
             self.custom_player_team_names = dlg.result.get("names", [])
             self.custom_item_style = dlg.result.get("item_style", "balanced")
+            move_map = dlg.result.get("moves_by_pokemon", {})
+            ability_map = dlg.result.get("ability_by_pokemon", {})
+            item_map = dlg.result.get("item_by_pokemon", {})
             if self.custom_player_team_names:
-                self.msg.set(f"Custom team set ({len(self.custom_player_team_names)}). Start a new battle to use it.")
+                self.custom_player_team_moves = {name: move_map.get(name, []) for name in self.custom_player_team_names}
+                self.custom_player_team_abilities = {name: ability_map.get(name, "") for name in self.custom_player_team_names}
+                self.custom_player_team_items = {name: item_map.get(name, "") for name in self.custom_player_team_names}
             else:
-                self.msg.set("Custom team cleared.")
+                self.custom_player_team_moves = {}
+                self.custom_player_team_abilities = {}
+                self.custom_player_team_items = {}
+
+            self._new_battle()
+
+            if self.custom_player_team_names:
+                self.msg.set(f"Custom team loaded ({len(self.custom_player_team_names)}) - your turn.")
+            else:
+                self.msg.set("Custom team cleared. Balanced roster ready.")
+
+
+
+
+
 
 
 class TeamBuilderDialog(tk.Toplevel):
-    def __init__(self, master, stats_df, initial_names=None, initial_style: str = "balanced"):
+    def __init__(
+        self,
+        master,
+        stats_df,
+        moves_df,
+        abilities_df,
+        initial_names=None,
+        initial_style: str = "balanced",
+        initial_moves=None,
+        initial_abilities=None,
+        initial_items=None,
+    ):
         super().__init__(master)
         self.title("Build Your Team")
         self.resizable(False, False)
         self.result = None
-        # List only Pokémon with Pikalytics usage >= 0.05%
-        all_stats_names = [str(n) for n in stats_df["pokemon"].unique()] if "pokemon" in stats_df.columns else []
+        self._stats_df = stats_df
+        self._moves_df = moves_df
+        self._abilities_df = abilities_df
+
+        all_stats_names = [str(n) for n in stats_df['pokemon'].unique()] if 'pokemon' in stats_df.columns else []
         allowed = set()
         try:
-            # Prefer local compendium CSV if present (offline friendly)
             from pikalytics_util import load_compendium_single_csv, load_compendium_csv, CACHE_DIR
             import os
             fmt = "gen9vgc2025regh"
             single_csv = os.path.join(CACHE_DIR, f"compendium_{fmt}.csv")
             if os.path.exists(single_csv):
                 comp = load_compendium_single_csv(fmt)
-                allowed = {name for name, data in comp.get("pokemon", {}).items() if data.get("usage", 0) >= 0.05}
+                allowed = {name for name, data in comp.get('pokemon', {}).items() if data.get('usage', 0) >= 0.05}
             elif os.path.exists(os.path.join(CACHE_DIR, f"compendium_{fmt}_overview.csv")):
                 comp = load_compendium_csv(fmt)
-                allowed = {name for name, data in comp.get("pokemon", {}).items() if data.get("usage", 0) >= 0.05}
+                allowed = {name for name, data in comp.get('pokemon', {}).items() if data.get('usage', 0) >= 0.05}
             else:
                 overview = fetch_overview(fmt)
                 allowed = {n for (n, u) in overview if isinstance(u, (int, float)) and float(u) >= 0.05}
@@ -270,103 +505,384 @@ class TeamBuilderDialog(tk.Toplevel):
             allowed_lc = {n.lower() for n in allowed}
             self._all_names = sorted([n for n in all_stats_names if n.lower() in allowed_lc])
         else:
-            # Fallback: show all if no usage data available
             self._all_names = sorted(all_stats_names)
         self._filtered = list(self._all_names)
-        self._team = list(initial_names or [])
+        self._team: List[str] = list(initial_names or [])
         self._style = tk.StringVar(value=initial_style or "balanced")
+
+        self._moves_by_pokemon: Dict[str, List[str]] = {
+            name: list((initial_moves or {}).get(name, []))[:4] for name in self._team
+        }
+        self._ability_by_pokemon: Dict[str, str] = {
+            name: str((initial_abilities or {}).get(name, "")) for name in self._team
+        }
+        self._item_by_pokemon: Dict[str, str] = {
+            name: str((initial_items or {}).get(name, "")) for name in self._team
+        }
+        self._current_pokemon: Optional[str] = self._team[0] if self._team else None
+        self._available_move_entries: List[Tuple[str, str]] = []
 
         frm = ttk.Frame(self, padding=10)
         frm.grid(row=0, column=0, sticky="nsew")
+        frm.columnconfigure(0, weight=1)
         frm.columnconfigure(1, weight=1)
+        frm.columnconfigure(2, weight=1)
+        frm.rowconfigure(2, weight=1)
 
-        # Search
         ttk.Label(frm, text="Search:").grid(row=0, column=0, sticky="w")
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._apply_filter())
-        ttk.Entry(frm, textvariable=self.search_var, width=24).grid(row=0, column=1, sticky="ew", padx=(4,0))
+        ttk.Entry(frm, textvariable=self.search_var, width=24).grid(row=0, column=1, columnspan=2, sticky="ew", padx=(4, 0))
 
-        # Available list
-        ttk.Label(frm, text="Available").grid(row=1, column=0, sticky="w", pady=(6,0))
+        ttk.Label(frm, text="Available").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(frm, text="Your Team (max 6)").grid(row=1, column=2, sticky="w", pady=(6, 0))
+
         self.list_available = tk.Listbox(frm, height=12, exportselection=False)
-        self.list_available.grid(row=2, column=0, columnspan=2, sticky="nsew")
+        self.list_available.grid(row=2, column=0, sticky="nsew")
 
-        # Team list
-        ttk.Label(frm, text="Your Team (max 6)").grid(row=1, column=2, sticky="w", padx=(12,0), pady=(6,0))
         self.list_team = tk.Listbox(frm, height=12, exportselection=False)
-        self.list_team.grid(row=2, column=2, sticky="nsew", padx=(12,0))
+        self.list_team.grid(row=2, column=2, sticky="nsew", padx=(12, 0))
+        self.list_team.bind("<<ListboxSelect>>", self._on_team_selection)
 
-        # Buttons
         btns = ttk.Frame(frm)
-        btns.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(8,0))
+        btns.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         ttk.Button(btns, text="Add", command=self._add_selected).pack(side=tk.LEFT)
-        ttk.Button(btns, text="Remove", command=self._remove_selected).pack(side=tk.LEFT, padx=(6,0))
-        ttk.Button(btns, text="Clear", command=self._clear_team).pack(side=tk.LEFT, padx=(6,0))
+        ttk.Button(btns, text="Remove", command=self._remove_selected).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(btns, text="Clear", command=self._clear_team).pack(side=tk.LEFT, padx=(6, 0))
 
-        # Item style
-        ttk.Label(frm, text="Item style:").grid(row=4, column=0, sticky="w", pady=(10,0))
+        move_frame = ttk.LabelFrame(frm, text="Moves")
+        move_frame.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
+        move_frame.columnconfigure(0, weight=1)
+        move_frame.columnconfigure(2, weight=1)
+
+        ttk.Label(move_frame, text="Available moves").grid(row=0, column=0, sticky="w")
+        ttk.Label(move_frame, text="Selected moves (max 4)").grid(row=0, column=2, sticky="w")
+
+        self.list_moves_available = tk.Listbox(move_frame, height=8, exportselection=False, selectmode=tk.MULTIPLE)
+        self.list_moves_available.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(4, 0))
+
+        move_buttons = ttk.Frame(move_frame)
+        move_buttons.grid(row=1, column=1, sticky="ns")
+        ttk.Button(move_buttons, text="Add ?", command=self._add_moves).pack(pady=2)
+        ttk.Button(move_buttons, text="? Remove", command=self._remove_moves).pack(pady=2)
+        ttk.Button(move_buttons, text="Clear", command=self._clear_moves).pack(pady=2)
+
+        self.list_moves_selected = tk.Listbox(move_frame, height=8, exportselection=False)
+        self.list_moves_selected.grid(row=1, column=2, sticky="nsew", padx=(6, 0), pady=(4, 0))
+
+        self.move_hint = tk.StringVar(value="Select a Pok?mon to configure moves.")
+        ttk.Label(move_frame, textvariable=self.move_hint, anchor="w").grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+
+        gear = ttk.Frame(move_frame)
+        gear.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        gear.columnconfigure(1, weight=1)
+        gear.columnconfigure(3, weight=1)
+
+        ttk.Label(gear, text="Ability:").grid(row=0, column=0, sticky="w")
+        self._ability_var = tk.StringVar()
+        self.ability_combo = ttk.Combobox(gear, textvariable=self._ability_var, state="disabled", width=24)
+        self.ability_combo.grid(row=0, column=1, sticky="ew", padx=(4, 12))
+        self.ability_combo.bind("<<ComboboxSelected>>", self._on_ability_selected)
+
+        ttk.Label(gear, text="Item:").grid(row=0, column=2, sticky="w")
+        self._item_var = tk.StringVar()
+        self.item_combo = ttk.Combobox(gear, textvariable=self._item_var, state="disabled", width=24)
+        self.item_combo.grid(row=0, column=3, sticky="ew")
+        self.item_combo.bind("<<ComboboxSelected>>", self._on_item_selected)
+
+        ttk.Label(frm, text="Item style:").grid(row=5, column=0, sticky="w", pady=(10, 0))
         style_box = ttk.Combobox(frm, values=["balanced", "aggressive", "defensive"], textvariable=self._style, state="readonly", width=18)
-        style_box.grid(row=4, column=1, sticky="w", padx=(4,0), pady=(10,0))
+        style_box.grid(row=5, column=1, sticky="w", padx=(4, 0), pady=(10, 0))
 
-        # Action buttons
         actions = ttk.Frame(frm)
-        actions.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(10,0))
+        actions.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         ttk.Button(actions, text="Done", command=self._done).pack(side=tk.RIGHT)
-        ttk.Button(actions, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=(0,6))
+        ttk.Button(actions, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=(0, 6))
 
         self._refresh_lists()
 
     def _apply_filter(self):
-        q = (self.search_var.get() or "").strip().lower()
-        if not q:
+        query = (self.search_var.get() or "").strip().lower()
+        if not query:
             self._filtered = list(self._all_names)
         else:
-            self._filtered = [n for n in self._all_names if q in n.lower()]
+            self._filtered = [n for n in self._all_names if query in n.lower()]
         self._refresh_available()
 
     def _refresh_available(self):
         self.list_available.delete(0, tk.END)
-        for n in self._filtered:
-            self.list_available.insert(tk.END, n)
+        for name in self._filtered:
+            self.list_available.insert(tk.END, name)
 
-    def _refresh_team(self):
+    def _refresh_team(self, select_name: Optional[str] = None):
         self.list_team.delete(0, tk.END)
-        for n in self._team:
-            self.list_team.insert(tk.END, n)
+        for name in self._team:
+            self.list_team.insert(tk.END, name)
+        if not self._team:
+            self._current_pokemon = None
+            self.list_team.selection_clear(0, tk.END)
+            self._available_move_entries = []
+            self._refresh_move_lists()
+            self.move_hint.set("Add a Pok?mon to configure moves.")
+            self._set_ability_controls(None, [])
+            self._set_item_controls(None, [])
+            return
+        target = select_name
+        if target is None:
+            idxs = self.list_team.curselection()
+            if idxs:
+                target = self.list_team.get(idxs[0])
+            elif self._current_pokemon and self._current_pokemon in self._team:
+                target = self._current_pokemon
+            else:
+                target = self._team[0]
+        if target not in self._team:
+            target = self._team[0]
+        self.list_team.selection_clear(0, tk.END)
+        sel_idx = self._team.index(target)
+        self.list_team.selection_set(sel_idx)
+        self.list_team.see(sel_idx)
+        self._current_pokemon = target
+        self._on_team_selection()
 
     def _refresh_lists(self):
         self._refresh_available()
-        self._refresh_team()
+        self._refresh_team(self._current_pokemon)
+
+    def _on_team_selection(self, *_):
+        idx = self.list_team.curselection()
+        if not idx:
+            self._current_pokemon = None
+            self._available_move_entries = []
+            self._refresh_move_lists()
+            self.move_hint.set("Select a Pok?mon to configure moves.")
+            self._set_ability_controls(None, [])
+            self._set_item_controls(None, [])
+            return
+        name = self.list_team.get(idx[0])
+        self._current_pokemon = name
+        self._moves_by_pokemon.setdefault(name, [])
+        self._ability_by_pokemon.setdefault(name, str(self._ability_by_pokemon.get(name, "")))
+        self._item_by_pokemon.setdefault(name, str(self._item_by_pokemon.get(name, "")))
+        self._load_options_for(name)
+
+    @staticmethod
+    def _fetch_usage_details(name: str) -> Dict[str, List[Tuple[str, float]]]:
+        try:
+            det = fetch_details(name)
+            if isinstance(det, dict):
+                return det
+        except Exception:
+            pass
+        return {}
+
+    def _load_options_for(self, name: str):
+        html = _load_pikalytics_html(name)
+        details_cache: Optional[Dict[str, List[Tuple[str, float]]]] = None
+
+        move_pairs = _extract_moves_from_cache(name, html=html)
+        if not move_pairs:
+            details_cache = details_cache or self._fetch_usage_details(name)
+            move_pairs = details_cache.get("moves", []) if isinstance(details_cache, dict) else []
+        entries: List[Tuple[str, str]] = []
+        seen = set()
+        for mv_name, pct in move_pairs:
+            if not mv_name:
+                continue
+            key = str(mv_name).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                pct_val = float(pct)
+                label = f"{mv_name} ({pct_val:.1f}%)"
+            except Exception:
+                label = str(mv_name)
+            entries.append((label, str(mv_name)))
+            if len(entries) >= 20:
+                break
+        if not entries and self._moves_df is not None:
+            try:
+                subset = self._moves_df[self._moves_df['pokemon'].astype(str).str.lower() == name.lower()]
+                if not subset.empty:
+                    for mv in subset.get('move', subset.get('name')).tolist():
+                        mv_str = str(mv)
+                        if mv_str.lower() in seen:
+                            continue
+                        seen.add(mv_str.lower())
+                        entries.append((mv_str, mv_str))
+                        if len(entries) >= 20:
+                            break
+            except Exception:
+                pass
+        self._available_move_entries = entries
+        if not entries:
+            self.move_hint.set('No cached moves found; defaults will be used.')
+        else:
+            current = len(self._moves_by_pokemon.get(name, []))
+            if current == 0:
+                defaults = [raw for _, raw in entries[:4]]
+                self._moves_by_pokemon[name] = defaults
+                current = len(defaults)
+            self.move_hint.set(f'Select up to four moves ({current}/4 chosen).')
+        self._refresh_move_lists()
+
+        ability_pairs = _extract_abilities_from_cache(name, html=html)
+        if not ability_pairs:
+            details_cache = details_cache or self._fetch_usage_details(name)
+            ability_pairs = details_cache.get("abilities", []) if isinstance(details_cache, dict) else []
+        ability_names = [ab for ab, _ in ability_pairs if ab]
+        self._set_ability_controls(name, ability_names)
+
+        item_pairs = _extract_items_from_cache(name, html=html)
+        if not item_pairs:
+            details_cache = details_cache or self._fetch_usage_details(name)
+            item_pairs = details_cache.get("items", []) if isinstance(details_cache, dict) else []
+        item_names = [it for it, _ in item_pairs if it]
+        self._set_item_controls(name, item_names)
+
+    def _set_ability_controls(self, name: Optional[str], options: List[str]):
+        if name is None or not options:
+            self.ability_combo.config(state="disabled", values=[])
+            if name is None:
+                self._ability_var.set("")
+            else:
+                current = self._ability_by_pokemon.get(name, "")
+                self._ability_var.set(current)
+            return
+        self.ability_combo.config(state="readonly", values=options)
+        current = self._ability_by_pokemon.get(name)
+        if not current or current not in options:
+            current = options[0]
+            self._ability_by_pokemon[name] = current
+        self._ability_var.set(current)
+
+    def _set_item_controls(self, name: Optional[str], options: List[str]):
+        if name is None or not options:
+            self.item_combo.config(state="disabled", values=[])
+            if name is None:
+                self._item_var.set("")
+            else:
+                current = self._item_by_pokemon.get(name, "")
+                self._item_var.set(current)
+            return
+        self.item_combo.config(state="readonly", values=options)
+        current = self._item_by_pokemon.get(name)
+        if not current or current not in options:
+            current = options[0]
+            self._item_by_pokemon[name] = current
+        self._item_var.set(current)
+
+    def _refresh_move_lists(self):
+        self.list_moves_available.delete(0, tk.END)
+        for display, _ in self._available_move_entries:
+            self.list_moves_available.insert(tk.END, display)
+        self._refresh_selected_moves()
+
+    def _refresh_selected_moves(self):
+        self.list_moves_selected.delete(0, tk.END)
+        if not self._current_pokemon:
+            return
+        chosen = self._moves_by_pokemon.get(self._current_pokemon, [])
+        for mv_name in chosen:
+            self.list_moves_selected.insert(tk.END, mv_name)
+        if self._available_move_entries:
+            self.move_hint.set(f'Select up to four moves ({len(chosen)}/4 chosen).')
+
+    def _add_moves(self):
+        if not self._current_pokemon or not self._available_move_entries:
+            return
+        indices = self.list_moves_available.curselection()
+        if not indices:
+            return
+        chosen = self._moves_by_pokemon.setdefault(self._current_pokemon, [])
+        for idx in indices:
+            if len(chosen) >= 4:
+                break
+            _, mv_name = self._available_move_entries[idx]
+            if mv_name not in chosen:
+                chosen.append(mv_name)
+        self._moves_by_pokemon[self._current_pokemon] = chosen[:4]
+        self._refresh_selected_moves()
+
+    def _remove_moves(self):
+        if not self._current_pokemon:
+            return
+        indices = self.list_moves_selected.curselection()
+        if not indices:
+            return
+        to_remove = {self.list_moves_selected.get(i) for i in indices}
+        chosen = self._moves_by_pokemon.get(self._current_pokemon, [])
+        self._moves_by_pokemon[self._current_pokemon] = [mv for mv in chosen if mv not in to_remove]
+        self._refresh_selected_moves()
+
+    def _clear_moves(self):
+        if not self._current_pokemon:
+            return
+        self._moves_by_pokemon[self._current_pokemon] = []
+        self._refresh_selected_moves()
+
+    def _on_ability_selected(self, *_):
+        if not self._current_pokemon:
+            return
+        value = (self._ability_var.get() or "").strip()
+        if value:
+            self._ability_by_pokemon[self._current_pokemon] = value
+        else:
+            self._ability_by_pokemon.pop(self._current_pokemon, None)
+
+    def _on_item_selected(self, *_):
+        if not self._current_pokemon:
+            return
+        value = (self._item_var.get() or "").strip()
+        if value:
+            self._item_by_pokemon[self._current_pokemon] = value
+        else:
+            self._item_by_pokemon.pop(self._current_pokemon, None)
 
     def _add_selected(self):
         if len(self._team) >= 6:
             return
-        try:
-            idx = self.list_available.curselection()
-            if not idx:
-                return
-            name = self.list_available.get(idx[0])
-            if name not in self._team:
-                self._team.append(name)
-                self._refresh_team()
-        except Exception:
-            pass
+        idx = self.list_available.curselection()
+        if not idx:
+            return
+        name = self.list_available.get(idx[0])
+        if name in self._team:
+            return
+        self._team.append(name)
+        self._moves_by_pokemon.setdefault(name, [])
+        self._ability_by_pokemon.setdefault(name, "")
+        self._item_by_pokemon.setdefault(name, "")
+        self._refresh_team(select_name=name)
 
     def _remove_selected(self):
-        try:
-            idx = self.list_team.curselection()
-            if not idx:
-                return
-            name = self.list_team.get(idx[0])
-            self._team = [n for n in self._team if n != name]
-            self._refresh_team()
-        except Exception:
-            pass
+        idx = self.list_team.curselection()
+        if not idx:
+            return
+        name = self.list_team.get(idx[0])
+        self._team = [n for n in self._team if n != name]
+        self._moves_by_pokemon.pop(name, None)
+        self._ability_by_pokemon.pop(name, None)
+        self._item_by_pokemon.pop(name, None)
+        self._refresh_team()
 
     def _clear_team(self):
         self._team = []
+        self._moves_by_pokemon.clear()
+        self._ability_by_pokemon.clear()
+        self._item_by_pokemon.clear()
         self._refresh_team()
 
     def _done(self):
-        self.result = {"names": list(self._team)[:6], "item_style": self._style.get() or "balanced"}
+        names = list(self._team)[:6]
+        moves_map = {name: list(self._moves_by_pokemon.get(name, [])[:4]) for name in names}
+        ability_map = {name: self._ability_by_pokemon.get(name, "") for name in names if self._ability_by_pokemon.get(name, "")}
+        item_map = {name: self._item_by_pokemon.get(name, "") for name in names if self._item_by_pokemon.get(name, "")}
+        self.result = {
+            'names': names,
+            'item_style': self._style.get() or 'balanced',
+            'moves_by_pokemon': moves_map,
+            'ability_by_pokemon': ability_map,
+            'item_by_pokemon': item_map,
+        }
         self.destroy()
