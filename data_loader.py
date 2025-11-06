@@ -19,7 +19,8 @@ data_loader.py
 import os
 import time
 import difflib
-from typing import List, Optional, Tuple
+import re
+from typing import List, Optional, Tuple, Dict, Any
 import pandas as pd
 
 CACHE_DIR = "pikalytics_cache"
@@ -53,6 +54,214 @@ SETUP_MOVE_KEYWORDS = [
 ]
 
 
+STATUS_KEYWORDS = {
+    "burn": "burn",
+    "paralyz": "paralysis",
+    "badly poison": "badly_poison",
+    "toxic": "badly_poison",
+    "poison": "poison",
+    "sleep": "sleep",
+    "freeze": "freeze",
+    "confus": "confusion",
+    "flinch": "flinch",
+    "drows": "sleep",
+    "restor": "heal",
+}
+
+STAT_NAME_ALIASES: Dict[str, List[str]] = {
+    "attack": ["attack", "att."],
+    "defense": ["defense", "def."],
+    "special_attack": ["special attack", "sp. atk", "special atk", "sp atk"],
+    "special_defense": ["special defense", "sp. def", "special def", "sp def"],
+    "speed": ["speed"],
+    "accuracy": ["accuracy"],
+    "evasion": ["evasiveness", "evasion"],
+}
+
+HAZARD_MOVES: Dict[str, Dict[str, Any]] = {
+    "stealth rock": {"type": "stealth_rock"},
+    "spikes": {"type": "spikes"},
+    "toxic spikes": {"type": "toxic_spikes"},
+    "sticky web": {"type": "sticky_web"},
+    "stone axe": {"type": "stealth_rock"},
+    "ceaseless edge": {"type": "spikes"},
+}
+
+CLEAR_HAZARD_MOVES: Dict[str, str] = {
+    "rapid spin": "self",
+    "mortal spin": "self",
+    "tidy up": "both",
+    "defog": "both",
+    "court change": "swap",
+}
+
+SCREEN_MOVES: Dict[str, str] = {
+    "reflect": "reflect",
+    "light screen": "light_screen",
+    "aurora veil": "aurora_veil",
+}
+
+FIELD_MOVES: Dict[str, Dict[str, str]] = {
+    "tailwind": {"type": "tailwind", "scope": "side"},
+    "trick room": {"type": "trick_room", "scope": "global"},
+    "magic room": {"type": "magic_room", "scope": "global"},
+    "wonder room": {"type": "wonder_room", "scope": "global"},
+    "gravity": {"type": "gravity", "scope": "global"},
+    "safeguard": {"type": "safeguard", "scope": "side"},
+    "mist": {"type": "mist", "scope": "side"},
+    "lucky chant": {"type": "lucky_chant", "scope": "side"},
+    "haze": {"type": "haze", "scope": "global"},
+}
+
+TERRAIN_MOVES: Dict[str, str] = {
+    "electric terrain": "Electric",
+    "grassy terrain": "Grassy",
+    "misty terrain": "Misty",
+    "psychic terrain": "Psychic",
+}
+
+WEATHER_MOVES: Dict[str, str] = {
+    "rain dance": "Rain",
+    "sunny day": "Sun",
+    "sandstorm": "Sand",
+    "snowscape": "Snow",
+    "hail": "Snow",
+    "chilly reception": "Snow",
+}
+
+def _word_to_int(word: str) -> Optional[int]:
+    mapping = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+    }
+    return mapping.get(word.strip().lower())
+
+
+def _extract_percentage(text: str) -> Optional[int]:
+    match = re.search(r"(\d+)\s*%", text)
+    if match:
+        try:
+            return int(match.group(1))
+        except Exception:
+            return None
+    return None
+
+
+def _infer_stage_delta(text: str) -> int:
+    if "drastically" in text or "severely" in text:
+        return 3
+    if "sharply" in text or "greatly" in text:
+        return 2
+    match = re.search(r"by\s+(one|two|three|four|\d+)\s+stage", text)
+    if match:
+        tok = match.group(1)
+        if tok.isdigit():
+            return int(tok)
+        val = _word_to_int(tok)
+        if val is not None:
+            return val
+    return 1
+
+
+def _infer_effect_chance(text: str) -> int:
+    pct = _extract_percentage(text)
+    if pct is not None:
+        return pct
+    if "$effect_chance" in text:
+        return 30
+    if "always" in text or "guaranteed" in text or "will" in text or "inflicts" in text:
+        return 100
+    if "may" in text or "chance" in text:
+        return 30
+    return 100
+
+
+def _parse_effect_metadata(name: str, effect_text: Optional[str]) -> Dict[str, Any]:
+    text = (effect_text or "").strip()
+    lower = text.lower()
+    name_lower = name.lower()
+    meta: Dict[str, Any] = {
+        "status": [],
+        "stat_changes": [],
+        "hazards": None,
+        "clear_hazards": None,
+        "screen": None,
+        "weather": None,
+        "terrain": None,
+        "field": [],
+        "healing": None,
+        "force_switch": False,
+        "cure_status": False,
+    }
+
+    if name_lower in WEATHER_MOVES:
+        meta["weather"] = WEATHER_MOVES[name_lower]
+    if name_lower in TERRAIN_MOVES:
+        meta["terrain"] = TERRAIN_MOVES[name_lower]
+    if name_lower in HAZARD_MOVES:
+        meta["hazards"] = HAZARD_MOVES[name_lower]
+    if name_lower in CLEAR_HAZARD_MOVES and CLEAR_HAZARD_MOVES[name_lower]:
+        meta["clear_hazards"] = CLEAR_HAZARD_MOVES[name_lower]
+    if name_lower in SCREEN_MOVES:
+        meta["screen"] = SCREEN_MOVES[name_lower]
+    if name_lower in FIELD_MOVES:
+        meta["field"].append(FIELD_MOVES[name_lower])
+
+    if not lower:
+        return meta
+
+    # Status effects (e.g., burn, paralysis)
+    for key, status in STATUS_KEYWORDS.items():
+        if key in lower:
+            if status == "heal":
+                meta["healing"] = {"target": "self"}
+                continue
+            chance = _infer_effect_chance(lower)
+            target = "target"
+            if "user" in lower and "target" not in lower and status not in ("burn", "poison", "badly_poison"):
+                target = "self"
+            meta["status"].append({"status": status, "target": target, "chance": chance})
+
+    # Stat changes from description text
+    sentences = [s.strip() for s in re.split(r"[\\.!\n]", lower) if s.strip()]
+    for sentence in sentences:
+        for stat, aliases in STAT_NAME_ALIASES.items():
+            if not any(alias in sentence for alias in aliases):
+                continue
+            target = "target"
+            if any(tok in sentence for tok in ["user", "its own", "itself", "self", "ally"]):
+                target = "self"
+            if any(term in sentence for term in ["raise", "boost", "increase", "amplify"]):
+                delta = _infer_stage_delta(sentence)
+                meta["stat_changes"].append({
+                    "target": target,
+                    "stat": stat,
+                    "stages": delta,
+                    "chance": _infer_effect_chance(sentence),
+                })
+            if any(term in sentence for term in ["lower", "drop", "reduce", "decrease"]):
+                delta = -_infer_stage_delta(sentence)
+                meta["stat_changes"].append({
+                    "target": target,
+                    "stat": stat,
+                    "stages": delta,
+                    "chance": _infer_effect_chance(sentence),
+                })
+            break
+
+    # Healing moves
+    if "restore" in lower or "recovers" in lower or "heal" in lower:
+        meta["healing"] = {"target": "self"}
+    if "cures the user's status" in lower or "cures the user" in lower:
+        meta["cure_status"] = True
+
+    if "forces the target to switch" in lower or "switches the target out" in lower:
+        meta["force_switch"] = True
+
+    return meta
  
 class Move:
     def __init__(self, name: str, power: Optional[int] = 0, mtype: str = "Normal",
@@ -74,16 +283,22 @@ class Move:
         except Exception:
             self.pp = 10
         self.max_pp = self.pp
-        self.category = category or ("special" if is_special else "physical")
+        cat = str(category or ("special" if is_special else "physical")).strip().lower()
+        if cat not in {"physical", "special", "status"}:
+            cat = "special" if is_special else "physical"
+        self.category = cat
         self.is_special = (self.category == "special")
+        self.is_status = (self.category == "status")
         try:
             self.priority = int(priority) if priority is not None else 0
         except Exception:
             self.priority = 0
-        self.effect = effect
+        self.effect_text = str(effect or "")
+        self.effect = self.effect_text  # backward compatibility
+        self.metadata = _parse_effect_metadata(self.name, self.effect_text)
 
     def __repr__(self):
-        return f"Move({self.name}, {self.type}, pow={self.power}, pp={self.pp})"
+        return f"Move({self.name}, {self.type}, cat={self.category}, pow={self.power}, pp={self.pp})"
 
 
 class Pokemon:
@@ -112,6 +327,11 @@ class Pokemon:
         }
         self.status = None
         self.status_duration = 0
+        self.badly_poison_counter = 0
+        self.volatiles: Dict[str, Any] = {}
+        self.leech_seed = False
+        self.last_move: Optional[str] = None
+        self.last_move_turn: int = 0
 
     # compatibility aliases used by battle_ai
     @property
@@ -136,6 +356,11 @@ class Pokemon:
         p.stat_stages = dict(self.stat_stages)
         p.status = self.status
         p.status_duration = self.status_duration
+        p.badly_poison_counter = self.badly_poison_counter
+        p.volatiles = dict(self.volatiles)
+        p.leech_seed = self.leech_seed
+        p.last_move = self.last_move
+        p.last_move_turn = self.last_move_turn
         return p
 
     def __repr__(self):
@@ -418,9 +643,16 @@ def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_mov
             pp = int(row.get('pp') or 10)
         except Exception:
             pp = 10
-        category = row.get('category') or ("special" if row.get('is_special', False) else "physical")
-        effect = row.get('effect') if 'effect' in row.index else None
-        mv = Move(mname, power, mtype, accuracy, pp, category, category == "special", effect=effect)
+        category = row.get('category') or row.get('damage_class') or ("special" if row.get('is_special', False) else "physical")
+        category_str = str(category).strip().lower()
+        if category_str not in {"physical", "special", "status"}:
+            category_str = "special" if row.get('is_special', False) else "physical"
+        effect = None
+        if 'effect' in row.index:
+            effect = row.get('effect')
+        if not effect and 'short_descripton' in row.index:
+            effect = row.get('short_descripton')
+        mv = Move(mname, power, mtype, accuracy, pp, category_str, category_str == "special", effect=effect)
 
         # categorize
         if any(kw in str(mname).lower() for kw in setup_keywords):
