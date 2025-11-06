@@ -130,6 +130,7 @@ WEATHER_MOVES: Dict[str, str] = {
 }
 
 def _word_to_int(word: str) -> Optional[int]:
+    """Convert spelled-out numerals (one, two, etc.) used in free-form effect text."""
     mapping = {
         "one": 1,
         "two": 2,
@@ -141,6 +142,7 @@ def _word_to_int(word: str) -> Optional[int]:
 
 
 def _extract_percentage(text: str) -> Optional[int]:
+    """Pull an integer percentage out of narrative move descriptions."""
     match = re.search(r"(\d+)\s*%", text)
     if match:
         try:
@@ -151,6 +153,7 @@ def _extract_percentage(text: str) -> Optional[int]:
 
 
 def _infer_stage_delta(text: str) -> int:
+    """Guess how many stat stages a move raises/lowers based on keywords such as 'sharply'."""
     if "drastically" in text or "severely" in text:
         return 3
     if "sharply" in text or "greatly" in text:
@@ -167,6 +170,7 @@ def _infer_stage_delta(text: str) -> int:
 
 
 def _infer_effect_chance(text: str) -> int:
+    """Best-effort guess of a secondary-effect activation chance."""
     pct = _extract_percentage(text)
     if pct is not None:
         return pct
@@ -180,6 +184,7 @@ def _infer_effect_chance(text: str) -> int:
 
 
 def _parse_effect_metadata(name: str, effect_text: Optional[str]) -> Dict[str, Any]:
+    """Turn verbose effect text into structured metadata used by the simulator."""
     text = (effect_text or "").strip()
     lower = text.lower()
     name_lower = name.lower()
@@ -264,6 +269,7 @@ def _parse_effect_metadata(name: str, effect_text: Optional[str]) -> Dict[str, A
     return meta
  
 class Move:
+    """Lightweight move representation that normalizes CSV fields into battle-ready attributes."""
     def __init__(self, name: str, power: Optional[int] = 0, mtype: str = "Normal",
                  accuracy: Optional[int] = 100, pp: Optional[int] = 10, category: str = "physical",
                  is_special: bool = False, priority: int = 0, effect: Optional[str] = None):
@@ -302,6 +308,7 @@ class Move:
 
 
 class Pokemon:
+    """Mutable Pokemon model used during simulation with stat stages, status flags, and move set."""
     def __init__(self, name: str, types: List[str], hp: int, attack: int,
                  special_attack: int, defense: int, special_defense: int, speed: int,
                  moves: List[Move], ability: Optional[str] = None, item: Optional[str] = None,
@@ -374,8 +381,15 @@ def load_local_data(
     abilities_path: str = "gen9_pokemon_abilities.csv",
 ):
     """
-    Return (stats_df, moves_df, abilities_df).
-    Normalizes column names to lowercase.
+    Return three DataFrames (stats, moves, abilities) with normalized column names.
+
+    Path selection:
+        1. Use the provided path when the file exists.
+        2. Fall back to well-known alternates inside the repo.
+    Column normalization:
+        - Lowercase all columns and replace spaces with underscores.
+        - Ensure stats/abilities expose a `pokemon` column, and moves expose a `move` column.
+    """
     """
     # Prefer provided paths if they exist; else fall back to common alternates in this repo
     def pick_path(primary: str, fallbacks):
@@ -487,7 +501,7 @@ def _is_setup_move(move_name: str) -> bool:
 
 
 def _select_moves_with_setup(candidate_moves: List[Move], max_moves: int = 4) -> List[Move]:
-    """Select a move set prioritising the most common options and one setup move."""
+    """Select a move set prioritizing power while ensuring at least one setup/utility option."""
     unique_moves: List[Move] = []
     seen_names: List[str] = []
     for mv in candidate_moves:
@@ -523,6 +537,7 @@ def _select_moves_with_setup(candidate_moves: List[Move], max_moves: int = 4) ->
 
 
 def _lookup_move_in_db(move_name: str, moves_df: pd.DataFrame) -> Optional[Move]:
+    """Pull the normalized Move object for a given name, tolerating casing and missing data."""
     """Lookup a move by name in a global move DB and construct a Move."""
     if not move_name or moves_df is None or moves_df.empty:
         return None
@@ -557,6 +572,7 @@ def _lookup_move_in_db(move_name: str, moves_df: pd.DataFrame) -> Optional[Move]
 
 
 def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_moves=4) -> List[Move]:
+    """Load the most frequently-used moves for `pokemon_name` with setup fallback heuristics."""
     """
     Choose up to max_moves for a Pokémon using heuristics:
       - prefer STAB moves (same type)
@@ -670,7 +686,16 @@ def _choose_moves_for_pokemon(pokemon_name: str, moves_df: pd.DataFrame, max_mov
 
 def create_pokemon_from_name(name: str, stats_df: pd.DataFrame, moves_df: pd.DataFrame, abilities_df: pd.DataFrame,
                              level: int = 50, preferred_item: Optional[str] = None):
-    """Create a Pokemon instance from CSV rows (defensive about column names)."""
+    """
+    Create a fully-initialized `Pokemon` object from the raw CSV data.
+
+    Steps:
+    1. Resolve the closest stats row (permitting fuzzy matches and form names).
+    2. Normalize typing and base stats with tolerant fallbacks.
+    3. Assemble a move set using usage heuristics (Pikalytics first, CSV fallback).
+    4. Choose a plausible ability by consulting Pikalytics, ability CSV, then stats CSV.
+    5. Default the held item to the provided style hint when available.
+    """
     original_query = str(name)
     row, resolved_name, matched_col, match_score = _resolve_stats_row(original_query, stats_df)
     if row is None:
@@ -785,9 +810,12 @@ def create_pokemon_from_name(name: str, stats_df: pd.DataFrame, moves_df: pd.Dat
  
 def fetch_pikalytics(pokemon_slug: str, use_cache=True, wait=1.0):
     """
-    Fetch basic data from pikalytics page for a Pokémon.
-    Caches raw HTML to CACHE_DIR/<pokemon>.html
-    Returns {'url': url, 'tables': [pandas tables...]}.
+    Fetch basic data from the Pikalytics Pokédex for a Pokémon.
+
+    Strategy:
+    - Try to load the cached HTML from `pikalytics_cache/`.
+    - If cache miss and `requests` is available, fetch from the live site and persist it.
+    - Parse any HTML tables using `pandas.read_html`, returning them for downstream analysis.
     """
     # Lazy import to avoid hard dependency if requests isn't installed
     try:

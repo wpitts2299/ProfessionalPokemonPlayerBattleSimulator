@@ -71,6 +71,7 @@ class BattleState:
     """
 
     def __init__(self, ai_team: List[Pokemon], player_team: List[Pokemon]):
+        """Clone the incoming rosters and attach bookkeeping for weather, terrain, and side effects."""
         self.ai_team = [p.copy_for_battle() for p in ai_team]
         self.player_team = [p.copy_for_battle() for p in player_team]
         self.weather = {"type": None, "turns": 0}  # {"type": "Rain"/"Sun"/"Sand"/"Snow", "turns": int}
@@ -92,6 +93,7 @@ class BattleState:
 
     @staticmethod
     def _default_side_state() -> Dict[str, Any]:
+        """Return the baseline side-condition structure for hazards, screens, and buffs."""
         return {
             "hazards": {"stealth_rock": False, "spikes": 0, "toxic_spikes": 0, "sticky_web": False},
             "screens": {"reflect": 0, "light_screen": 0, "aurora_veil": 0},
@@ -102,15 +104,19 @@ class BattleState:
         }
 
     def active_ai(self) -> Optional[Pokemon]:
+        """Return the first living AI Pokemon; used as the active combatant."""
         return next((p for p in self.ai_team if not p.is_fainted()), None)
 
     def active_player(self) -> Optional[Pokemon]:
+        """Return the first living player Pokemon; used as the human-controlled active slot."""
         return next((p for p in self.player_team if not p.is_fainted()), None)
 
     def is_terminal(self) -> bool:
+        """A battle ends when one side has no healthy Pokemon remaining."""
         return all(p.is_fainted() for p in self.ai_team) or all(p.is_fainted() for p in self.player_team)
 
     def copy(self) -> "BattleState":
+        """Deep-copy the state so recursive simulations cannot mutate shared objects."""
         return deepcopy(self)
 
 
@@ -119,11 +125,13 @@ class BattleAI:
     """Battle AI that chooses actions using recursive simulation."""
 
     def __init__(self, recursion_depth: int = 2):
+        """Load local CSV data and record how many plies to explore during lookahead."""
         self.stats_df, self.moves_df, self.abilities_df = load_local_data()
         self.recursion_depth = recursion_depth
 
     
     def _side_of(self, state: BattleState, pokemon: Optional[Pokemon]) -> Optional[str]:
+        """Return 'ai' or 'player' to indicate which roster a Pokemon belongs to."""
         if pokemon is None:
             return None
         if pokemon in state.ai_team:
@@ -133,6 +141,7 @@ class BattleAI:
         return None
 
     def _opponent_side(self, side: Optional[str]) -> Optional[str]:
+        """Translate a side label to its opposing side."""
         if side == "ai":
             return "player"
         if side == "player":
@@ -140,16 +149,19 @@ class BattleAI:
         return None
 
     def _has_ability(self, pokemon: Optional[Pokemon], ability_name: str) -> bool:
+        """Case-insensitive ability comparison with None safety."""
         if not pokemon or not getattr(pokemon, "ability", None):
             return False
         return str(pokemon.ability).strip().lower() == ability_name.strip().lower()
 
     def _has_item(self, pokemon: Optional[Pokemon], item_name: str) -> bool:
+        """Case-insensitive held-item comparison with None safety."""
         if not pokemon or not getattr(pokemon, "item", None):
             return False
         return str(pokemon.item).strip().lower() == item_name.strip().lower()
 
     def _is_grounded(self, pokemon: Optional[Pokemon]) -> bool:
+        """Return True if the Pokemon is affected by ground hazards/terrain."""
         if not pokemon:
             return False
         types = {_norm_type(t) for t in getattr(pokemon, "type", [])}
@@ -162,6 +174,7 @@ class BattleAI:
         return True
 
     def _ensure_event_log(self, state: BattleState) -> None:
+        """Ensure the simulation state exposes a mutable `last_events` list for narration."""
         if not hasattr(state, "last_events") or state.last_events is None:
             state.last_events = []
 
@@ -364,9 +377,11 @@ class BattleAI:
     
     
     def _stage_mult(self, stage: int) -> float:
+        """Convert a stat stage (-6..+6) into the standard battle multiplier."""
         return (2 + stage) / 2.0 if stage >= 0 else 2.0 / (2 - stage)
 
     def _effective_speed(self, p: Pokemon, state: BattleState, side: Optional[str]) -> float:
+        """Calculate speed after factoring in stages, status ailments, items, weather, and Tailwind."""
         base = float(getattr(p, "speed", 0))
         base *= self._stage_mult(p.stat_stages.get("speed", 0))
         if getattr(p, "status", None) == "paralysis":
@@ -393,6 +408,7 @@ class BattleAI:
         return max(base, 1.0)
 
     def _outspeeds(self, a: Pokemon, d: Pokemon, state: BattleState) -> bool:
+        """Return True when `a` should act before `d`, respecting Trick Room inversions."""
         side_a = self._side_of(state, a)
         side_d = self._side_of(state, d)
         speed_a = self._effective_speed(a, state, side_a)
@@ -402,6 +418,7 @@ class BattleAI:
         return speed_a >= speed_d
 
     def _best_opponent_move(self, defender: Pokemon, target: Pokemon, state: BattleState) -> Optional[Move]:
+        """Heuristically pick the scariest move the opponent could use on the given target."""
         if not defender or not defender.moves:
             return None
         scored = []
@@ -414,13 +431,16 @@ class BattleAI:
         return max(scored, key=lambda x: x[0])[1] if scored else None
 
     def _bench_candidates(self, state: BattleState, exclude_name: str) -> List[Pokemon]:
+        """Return AI-controlled Pokemon that are healthy and not the excluded name."""
         return [p for p in state.ai_team if p.name != exclude_name and not p.is_fainted()]
 
     # --- Battle effect helpers -------------------------------------------------
     def _alive_team(self, team: List[Pokemon]) -> List[Pokemon]:
+        """Strip out fainted Pokemon from an arbitrary roster."""
         return [p for p in team if not p.is_fainted()]
 
     def _alive_bench(self, state: BattleState, side: str, exclude: Optional[str] = None) -> List[Pokemon]:
+        """Return viable switch candidates for the requested side, skipping exclusions and the active slot."""
         pool = state.ai_team if side == "ai" else state.player_team
         bench = []
         for p in pool:
@@ -440,6 +460,7 @@ class BattleAI:
         defender: Pokemon,
         state: BattleState,
     ) -> List[Tuple[float, Move]]:
+        """Return super-effective attacking options sorted by estimated damage output."""
         candidates: List[Tuple[float, Move]] = []
         for mv in attacker.moves:
             if mv.pp <= 0 or mv.power <= 0:
@@ -456,6 +477,7 @@ class BattleAI:
         move: Move,
         targets: Iterable[Pokemon],
     ) -> Tuple[float, float]:
+        """Evaluate the best and worst effectiveness multipliers of `move` against the provided targets."""
         best = -float("inf")
         worst = float("inf")
         for target in targets:
@@ -468,6 +490,7 @@ class BattleAI:
         return best, worst
 
     def _find_stat_boost_move(self, pokemon: Pokemon, stats: Iterable[str]) -> Optional[Tuple[Move, Dict[str, int]]]:
+        """Search the move pool for a self-targeting status move that boosts the desired stats."""
         desired = {s.lower() for s in stats}
         best_choice: Optional[Tuple[int, Dict[str, int], Move]] = None
         for mv in pokemon.moves:
@@ -495,6 +518,7 @@ class BattleAI:
         return None
 
     def _should_use_attack_boost(self, state: BattleState, ai_pkm: Pokemon, player_pkm: Pokemon) -> bool:
+        """Determine whether taking a turn to raise offensive stats is worth the risk."""
         best_move = self._best_opponent_move(player_pkm, ai_pkm, state)
         if not best_move:
             return True
@@ -506,6 +530,7 @@ class BattleAI:
         return False
 
     def _should_use_defense_boost(self, state: BattleState, ai_pkm: Pokemon, player_pkm: Pokemon) -> bool:
+        """Gauge whether a defensive buff will meaningfully reduce incoming pressure."""
         best_move = self._best_opponent_move(player_pkm, ai_pkm, state)
         if not best_move:
             return False
@@ -523,6 +548,7 @@ class BattleAI:
         defender: Pokemon,
         defender_bench: List[Pokemon],
     ) -> Optional[Move]:
+        """Evaluate attacking moves by considering the worst-case switch-in outcome."""
         if not defender_bench:
             return None
         candidates: List[Tuple[float, float, float, Move]] = []
@@ -549,6 +575,7 @@ class BattleAI:
         ai_pkm: Pokemon,
         player_pkm: Pokemon,
     ) -> Optional[Pokemon]:
+        """Find a teammate that better resists the opponent's projected attack."""
         best_move = self._best_opponent_move(player_pkm, ai_pkm, state)
         if not best_move:
             return None
@@ -570,6 +597,7 @@ class BattleAI:
         return scored[0][2] if scored else None
 
     def _apply_stat_changes(self, pokemon: Pokemon, changes: List[Dict[str, Any]], events: List[str], source_name: str) -> None:
+        """Apply stage adjustments described in move metadata and log the resulting narration."""
         if not pokemon or not changes:
             return
         stat_map = {
@@ -614,6 +642,7 @@ class BattleAI:
         force: bool = False,
         source_pokemon: Optional[Pokemon] = None,
     ) -> bool:
+        """Apply a status effect if legal, respecting immunities, terrain, Safeguard, and RNG chance."""
         status = str(status or "").lower()
         if not target or not status:
             return False
@@ -703,6 +732,7 @@ class BattleAI:
         defender: Optional[Pokemon] = None,
         attacker: Optional[Pokemon] = None,
     ) -> None:
+        """Update the hazard slots for a side, handling Magic Bounce reflections and stacking rules."""
         if target_side is None or hazard_type is None:
             return
         target_store = state.side_conditions[target_side]["hazards"]
@@ -730,6 +760,7 @@ class BattleAI:
             events.append("Sticky web spread out on the ground.")
 
     def _clear_hazards(self, state: BattleState, side: Optional[str], events: List[str]) -> None:
+        """Remove all entry hazards from the specified side and narrate the cleanup."""
         if not side:
             return
         state.side_conditions[side]["hazards"] = {
@@ -741,12 +772,14 @@ class BattleAI:
         events.append("All entry hazards on the side were cleared.")
 
     def _clear_screens(self, state: BattleState, side: Optional[str], events: List[str]) -> None:
+        """Reset light screen/reflect/aurora veil timers."""
         if not side:
             return
         state.side_conditions[side]["screens"] = {"reflect": 0, "light_screen": 0, "aurora_veil": 0}
         events.append("Protective barriers disappeared!")
 
     def _on_switch_out(self, state: BattleState, pokemon: Pokemon, events: List[str]) -> None:
+        """Perform bookkeeping when a Pokemon leaves the field (e.g., Tailwind timers, volatiles)."""
         if not pokemon:
             return
         if self._has_ability(pokemon, "natural cure") and getattr(pokemon, "status", None):
@@ -761,6 +794,7 @@ class BattleAI:
         pokemon.leech_seed = False
 
     def _apply_switch_in_effects(self, state: BattleState, pokemon: Pokemon, side: Optional[str], events: List[str]) -> None:
+        """Trigger entry hazards, ability-based curing, and on-entry weather effects."""
         if not pokemon or not side:
             return
         hazards = state.side_conditions[side]["hazards"]
@@ -807,6 +841,7 @@ class BattleAI:
             events.append(f"{pokemon.name}'s Speed fell because of the sticky web!")
 
     def _apply_confusion_damage(self, state: BattleState, pokemon: Pokemon, events: List[str]) -> None:
+        """Resolve the self-hit roll for confusion using a 40-power typeless attack."""
         temp_move = Move("Confusion Hit", 40, "Normal", 100, 1, "physical")
         dmg = max(1, self.calculate_damage(pokemon, pokemon, temp_move, state))
         pokemon.hp = max(0, pokemon.hp - dmg)
@@ -815,6 +850,7 @@ class BattleAI:
             events.append(f"{pokemon.name} fainted!")
 
     def _handle_start_of_turn_conditions(self, state: BattleState, pokemon: Pokemon, events: List[str]) -> bool:
+        """Process flinch, sleep, confusion, and other gatekeeping effects before a move executes."""
         if not pokemon or pokemon.is_fainted():
             return False
         if pokemon.volatiles.get("flinch"):
@@ -861,6 +897,7 @@ class BattleAI:
         return True
 
     def _apply_weather_move(self, state: BattleState, attacker: Pokemon, weather_type: Optional[str], move: Optional[Move], events: List[str]) -> None:
+        """Set or extend weather while respecting item-based duration modifiers and redundancies."""
         if not weather_type:
             return
         base_turns = 5
@@ -879,6 +916,7 @@ class BattleAI:
             move.pp = max(0, move.pp - 1)
 
     def _apply_terrain(self, state: BattleState, attacker: Pokemon, terrain_type: Optional[str], move: Optional[Move], events: List[str]) -> None:
+        """Update terrain state, avoiding redundant refreshes that waste a turn."""
         if not terrain_type:
             return
         duration = 5
@@ -890,6 +928,7 @@ class BattleAI:
             move.pp = max(0, move.pp - 1)
 
     def _apply_screen(self, state: BattleState, side: Optional[str], screen_type: str, attacker: Pokemon, move: Optional[Move], events: List[str]) -> None:
+        """Handle Reflect, Light Screen, and Aurora Veil timers per side."""
         if not side:
             return
         duration = 5
@@ -903,6 +942,7 @@ class BattleAI:
             move.pp = max(0, move.pp - 1)
 
     def _apply_field_effect(self, state: BattleState, side: Optional[str], field_info: Dict[str, str], attacker: Pokemon, move: Optional[Move], events: List[str]) -> None:
+        """Apply global or side-based field effects such as Tailwind, Trick Room, or Gravity."""
         eff_type = field_info.get("type")
         scope = field_info.get("scope")
         if not eff_type:
@@ -948,6 +988,7 @@ class BattleAI:
         move: Move,
         events: List[str],
     ) -> None:
+        """Work through metadata-driven side effects (status, stat drops, hazards, healing, etc.)."""
         meta = getattr(move, "metadata", {}) or {}
         status_effects = meta.get("status", [])
         for effect in status_effects:
@@ -993,6 +1034,7 @@ class BattleAI:
                 events.append("The teams swapped their field conditions!")
 
     def _tick_weather(self, state: BattleState) -> None:
+        """Advance weather duration counters and clear them when they expire."""
         wt = state.weather.get("type")
         turns = state.weather.get("turns", 0)
         if wt and turns > 0:
@@ -1003,6 +1045,7 @@ class BattleAI:
                 state.weather["turns"] = turns
 
     def _tick_field_conditions(self, state: BattleState) -> None:
+        """Decrease durations for terrain, Trick Room, Gravity, and other timed effects."""
         terrain = state.field.get("terrain", {})
         if terrain.get("type") and terrain.get("turns", 0) > 0:
             terrain["turns"] -= 1
@@ -1022,6 +1065,7 @@ class BattleAI:
                     sc[timed_key] = max(0, sc[timed_key] - 1)
 
     def _apply_end_of_turn_effects(self, state: BattleState, events: List[str]) -> None:
+        """Handle burn/poison chip, Leftovers recovery, weather damage, and leech effects."""
         active_pairs = [("ai", state.active_ai()), ("player", state.active_player())]
         for side, mon in active_pairs:
             if not mon or mon.is_fainted():
@@ -1118,6 +1162,7 @@ class BattleAI:
                 events.append(f"{player_active.name} lost HP from Leech Seed (-{dmg}).")
 
     def _advance_turn(self, state: BattleState, events: List[str]) -> None:
+        """Update half-turn counters and tick per-turn effects once both sides have acted."""
         state.turn_half = (state.turn_half + 1) % 2
         if state.turn_half == 0:
             state.turn_count += 1
@@ -1126,6 +1171,7 @@ class BattleAI:
             self._apply_end_of_turn_effects(state, events)
 
     def _rule_layer_action(self, state: BattleState, setup_moves: List[str], weather_moves: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """High-priority tactical checks (secure KOs, finish low-HP foes) before deeper evaluation."""
         ai_pkm = state.active_ai()
         pl_pkm = state.active_player()
         if not ai_pkm or not pl_pkm:
@@ -1473,7 +1519,11 @@ class BattleAI:
 
     def calculate_damage(self, attacker: Pokemon, defender: Pokemon, move: Move, state: BattleState, critical: bool = False) -> int:
         """
-        Enhanced damage model with support for weather, terrain, screens, abilities, and items.
+        Enhanced damage approximation that mirrors key competitive mechanics:
+        - Base power scaling from Attack/Sp. Atk versus Defense/Sp. Def with stat stages.
+        - Critical hits bypassing negative offensive stages and positive defensive stages.
+        - Same-type attack bonus (STAB), type matchups, weather, terrain, and ability/item boosts.
+        - Screens, burn halving, and random +-15% variance.
         """
         if defender is None:
             return 0
@@ -1653,6 +1703,7 @@ class BattleAI:
         return move.power * mult * stab * (move.accuracy or 100) / 100.0
 
     def _weather_item_synergy(self, pokemon: Pokemon, weather_type: str) -> bool:
+        """Return True if the held item extends the provided weather type's duration."""
         item = getattr(pokemon, "item", "")
         if (item == "Damp Rock" and weather_type == "Rain") or \
            (item == "Heat Rock" and weather_type == "Sun") or \

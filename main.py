@@ -1,8 +1,8 @@
 """
-Entry point.
+Entry point for the Pokemon battle simulator.
 
-Default: launches the Tkinter GUI battle (gui_battle.py).
-Optional: run with --cli to use the console interactive battle.
+Default behavior is to launch the Tkinter GUI battle client (`gui_battle.py`).
+Pass the `--cli` flag to use the console interactive battle loop instead.
 """
 import argparse
 from typing import List
@@ -12,6 +12,7 @@ from pikalytics_util import fetch_overview
 from battle_ai import BattleAI, BattleState
 
 def print_team(team, title="Team"):
+    """Pretty-print the roster with typing, held items, and move summaries."""
     print(f"=== {title} ===")
     for p in team:
         print(f"- {p.name} ({'/'.join(p.type)}) | Item: {p.item} | Ability: {p.ability}")
@@ -19,6 +20,7 @@ def print_team(team, title="Team"):
             print(f"   - {mv.name} [{mv.type}] pow={mv.power} acc={mv.accuracy} pp={mv.pp}")
 
 def print_status(state: BattleState):
+    """Display the currently active battlers and shared weather for the CLI loop."""
     ai = state.active_ai()
     pl = state.active_player()
     wt = state.weather.get("type") or "None"
@@ -32,15 +34,17 @@ def print_status(state: BattleState):
 
 
 def choose_player_action(state: BattleState, ai: BattleAI):
+    """Prompt the user for a move or switch choice and convert it to an action dict."""
     player = state.active_player()
     if not player:
         return {"type": "noop"}
 
-    # List moves
+    # Present each move with its key stats so the player can make an informed decision.
     print("Your moves:")
     for idx, mv in enumerate(player.moves, 1):
         print(f"  {idx}. {mv.name} [{mv.type}] pow={mv.power} acc={mv.accuracy} pp={mv.pp}")
-    # List switch options
+
+    # Build the set of legal switch-ins (healthy teammates) and render them as `s#` options.
     bench: List[Pokemon] = [p for p in state.player_team if p.name != player.name and not p.is_fainted()]
     if bench:
         print("Switch options:")
@@ -51,7 +55,7 @@ def choose_player_action(state: BattleState, ai: BattleAI):
     weather_moves = ai.get_weather_moves()
     setup_moves = ai.get_setup_moves()
 
-    # Switch handling
+    # Switch handling: allow inputs like "s2" to select the second bench member.
     if cmd.startswith("s") and len(cmd) > 1 and bench:
         try:
             bi = int(cmd[1:]) - 1
@@ -60,7 +64,7 @@ def choose_player_action(state: BattleState, ai: BattleAI):
         except Exception:
             pass
 
-    # Move handling
+    # Move handling: default to the first move on bad input but otherwise respect the index.
     try:
         mi = int(cmd) - 1
     except Exception:
@@ -75,13 +79,16 @@ def choose_player_action(state: BattleState, ai: BattleAI):
 
 
 def run_cli_battle():
+    """Run the command-line battle loop against the AI, assembling teams on the fly."""
     stats_df, moves_df, abilities_df = load_local_data()
     print("Loaded data.")
 
     # Restrict AI pool to >=2.5% usage in Pikalytics (format gen9vgc2025regh)
     # Prefer CSV compendium if available; else try HTML cache/fetch.
+    # Build an allow-list of metagame staples so the AI fields competitively viable threats.
     allowed = set()
     try:
+        # Prefer cached CSV exports first; fall back to HTML parsing only when necessary.
         from pikalytics_util import load_compendium_single_csv, load_compendium_csv, CACHE_DIR
         import os
         fmt = "gen9vgc2025regh"
@@ -104,12 +111,13 @@ def run_cli_battle():
         allowed = {n for n in stats_names if n.lower() in allowed_lc}
     except Exception:
         pass
+    # Assemble the AI roster using the aggressive item palette so it keeps pressure on the player.
     ai_team = generate_balanced_team(
         stats_df, moves_df, abilities_df, n=6, item_style="aggressive",
         allowed_names=(allowed if allowed else None)
     )
     player_team = None
-    # Parse optional player team from args (comma-separated)
+    # Parse optional overrides for the player's roster (`--player-team` and `--item-style` flags).
     import sys
     names_arg = None
     style = "balanced"
@@ -119,6 +127,7 @@ def run_cli_battle():
         elif tok.startswith("--item-style="):
             style = tok.split("=",1)[1]
     if names_arg:
+        # Translate the comma-separated names into Pokemon objects, tolerating typos gracefully.
         chosen = [x.strip() for x in names_arg.split(',') if x.strip()]
         team = []
         for nm in chosen[:6]:
@@ -139,20 +148,22 @@ def run_cli_battle():
     state = BattleState(ai_team, player_team)
     ai = BattleAI(recursion_depth=2)
 
+    # All setup is complete—drop into the alternating player/AI loop.
     print("\nStarting battle! You control the Player side.\n")
+    # Hard-cap the encounter length so stalemates do not trap the CLI experience indefinitely.
     turn = 1
     max_turns = 50
     while turn <= max_turns and not state.is_terminal():
         print(f"\n===== Turn {turn} =====")
         print_status(state)
-        # Player acts
+        # PLAYER PHASE: resolve the human's decision first each turn.
         p_action = choose_player_action(state, ai)
         state = ai.simulate_action(state, attacker=state.active_player(), defender=state.active_ai(), action=p_action, weather_moves=ai.get_weather_moves())
         if getattr(state, 'last_event', None):
             print(state.last_event)
         if state.is_terminal():
             break
-        # AI acts
+        # AI PHASE: run the recursive evaluation policy and narrate the selected action.
         a_action = ai.choose_ai_action(state)
         print(f"AI chose: {a_action}")
         state = ai.simulate_action(state, attacker=state.active_ai(), defender=state.active_player(), action=a_action, weather_moves=ai.get_weather_moves())
@@ -161,6 +172,7 @@ def run_cli_battle():
         turn += 1
 
     print_status(state)
+    # Summarize the result once one side runs out of usable Pokemon or we hit the turn limit.
     ai_alive = any(not p.is_fainted() for p in state.ai_team)
     pl_alive = any(not p.is_fainted() for p in state.player_team)
     if pl_alive and not ai_alive:
@@ -172,10 +184,11 @@ def run_cli_battle():
 
 
 def run_gui_battle():
+    """Launch the GUI battle client if Tkinter is available, else fall back to CLI."""
     try:
         from gui_battle import BattleGUI
     except Exception as e:
-        print("GUI unavailable (", e, ") — falling back to CLI.")
+        print(f"GUI unavailable ({e}); falling back to CLI.")
         return run_cli_battle()
     app = BattleGUI()
     app.mainloop()
