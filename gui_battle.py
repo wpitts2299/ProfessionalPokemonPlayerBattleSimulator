@@ -13,12 +13,14 @@ except Exception as e:
 from typing import Dict, List, Optional, Tuple
 
 from data_loader import load_local_data, create_pokemon_from_name, _lookup_move_in_db, Pokemon
-from team_builder import generate_balanced_team, pick_item
+from team_builder import generate_balanced_team, generate_flowchart_ai_team, pick_item
 from pikalytics_util import fetch_overview, fetch_details, CACHE_DIR, _slugify
-from battle_ai import BattleAI, BattleState
+from battle_ai import BattleAI, BattleState, TYPE_EFFECTIVENESS
 
 
 DETAILS_FORMAT = "gen9vgc2025regh"
+TEAM_SIZE = 4
+AI_BANNED_MOVES = {"protect"}
 
 
 def _load_pikalytics_html(pokemon_name: str, format_slug: str = DETAILS_FORMAT) -> str:
@@ -223,10 +225,10 @@ class BattleGUI(tk.Tk):
     def _new_battle(self):
         # Build AI allowed set from Pikalytics (>= 2.5% usage)
         allowed_ai = set()
+        fmt = "gen9vgc2025regh"
         try:
             from pikalytics_util import load_compendium_single_csv, load_compendium_csv, CACHE_DIR
             import os
-            fmt = "gen9vgc2025regh"
             single_csv = os.path.join(CACHE_DIR, f"compendium_{fmt}.csv")
             if os.path.exists(single_csv):
                 comp = load_compendium_single_csv(fmt)
@@ -245,14 +247,28 @@ class BattleGUI(tk.Tk):
         stats_names = [str(n) for n in self.stats_df["pokemon"].unique()] if "pokemon" in self.stats_df.columns else []
         allowed_mapped = {n for n in stats_names if n.lower() in allowed_ai_lc}
 
-        ai_team = generate_balanced_team(
-            self.stats_df,
-            self.moves_df,
-            self.abilities_df,
-            n=6,
-            item_style="aggressive",
-            allowed_names=(allowed_mapped if allowed_mapped else None),
-        )
+        ai_allow = allowed_mapped if allowed_mapped else None
+        try:
+            ai_team = generate_flowchart_ai_team(
+                self.stats_df,
+                self.moves_df,
+                self.abilities_df,
+                n=TEAM_SIZE,
+                format_slug=fmt,
+                item_style="aggressive",
+                allowed_names=ai_allow,
+                banned_moves=AI_BANNED_MOVES,
+            )
+        except Exception:
+            ai_team = generate_balanced_team(
+                self.stats_df,
+                self.moves_df,
+                self.abilities_df,
+                n=TEAM_SIZE,
+                item_style="aggressive",
+                allowed_names=ai_allow,
+                banned_moves=AI_BANNED_MOVES,
+            )
         # Use custom player team if provided; otherwise generate balanced
         chosen_names = list(self.custom_player_team_names) if self.custom_player_team_names else []
         custom_moves_map: Dict[str, List[str]] = {name: list(moves)[:4] for name, moves in (self.custom_player_team_moves or {}).items()}
@@ -260,7 +276,7 @@ class BattleGUI(tk.Tk):
         custom_item_map: Dict[str, str] = {name: item for name, item in (self.custom_player_team_items or {}).items() if item}
         if chosen_names:
             team = []
-            for nm in chosen_names[:6]:
+            for nm in chosen_names[:TEAM_SIZE]:
                 try:
                     p = create_pokemon_from_name(nm, self.stats_df, self.moves_df, self.abilities_df, preferred_item=pick_item(self.custom_item_style))
                     override_names = [mv for mv in custom_moves_map.get(nm, []) if mv]
@@ -284,15 +300,15 @@ class BattleGUI(tk.Tk):
                     team.append(p)
                 except Exception:
                     continue
-            # Fill to 6 if needed
-            if len(team) < 6:
-                fill = generate_balanced_team(self.stats_df, self.moves_df, self.abilities_df, n=6, item_style=self.custom_item_style)
+            # Fill to reach the required team size if needed
+            if len(team) < TEAM_SIZE:
+                fill = generate_balanced_team(self.stats_df, self.moves_df, self.abilities_df, n=TEAM_SIZE, item_style=self.custom_item_style)
                 for p in fill:
-                    if p.name not in [q.name for q in team] and len(team) < 6:
+                    if p.name not in [q.name for q in team] and len(team) < TEAM_SIZE:
                         team.append(p)
             pl_team = team
         else:
-            pl_team = generate_balanced_team(self.stats_df, self.moves_df, self.abilities_df, n=6, item_style="balanced")
+            pl_team = generate_balanced_team(self.stats_df, self.moves_df, self.abilities_df, n=TEAM_SIZE, item_style="balanced")
         self.state = BattleState(ai_team, pl_team)
         self.msg.set("A new battle begins! Your turn.")
         self._refresh_ui()
@@ -345,7 +361,10 @@ class BattleGUI(tk.Tk):
         if not self.state or self.state.is_terminal():
             self._show_outcome()
             return
-        a = self.ai_engine.choose_ai_action(self.state)
+        if getattr(self.state, "skip_move", {}).get("ai"):
+            a = {"type": "skip"}
+        else:
+            a = self.ai_engine.choose_ai_action(self.state)
         self.state = self.ai_engine.simulate_action(
             self.state,
             attacker=self.state.active_ai(),
@@ -506,8 +525,12 @@ class TeamBuilderDialog(tk.Toplevel):
             self._all_names = sorted([n for n in all_stats_names if n.lower() in allowed_lc])
         else:
             self._all_names = sorted(all_stats_names)
+        self._type_by_name = self._build_type_lookup(stats_df)
+        type_pool = sorted({t for name in self._all_names for t in self._type_by_name.get(name, [])})
+        self._type_options = ["All types"] + type_pool if type_pool else ["All types"]
+
         self._filtered = list(self._all_names)
-        self._team: List[str] = list(initial_names or [])
+        self._team: List[str] = list(initial_names or [])[:TEAM_SIZE]
         self._style = tk.StringVar(value=initial_style or "balanced")
 
         self._moves_by_pokemon: Dict[str, List[str]] = {
@@ -529,13 +552,21 @@ class TeamBuilderDialog(tk.Toplevel):
         frm.columnconfigure(2, weight=1)
         frm.rowconfigure(2, weight=1)
 
-        ttk.Label(frm, text="Search:").grid(row=0, column=0, sticky="w")
+        filter_row = ttk.Frame(frm)
+        filter_row.grid(row=0, column=0, columnspan=3, sticky="ew")
+        filter_row.columnconfigure(1, weight=1)
+        ttk.Label(filter_row, text="Search:").grid(row=0, column=0, sticky="w")
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._apply_filter())
-        ttk.Entry(frm, textvariable=self.search_var, width=24).grid(row=0, column=1, columnspan=2, sticky="ew", padx=(4, 0))
+        ttk.Entry(filter_row, textvariable=self.search_var, width=24).grid(row=0, column=1, sticky="ew", padx=(4, 10))
+        ttk.Label(filter_row, text="Type:").grid(row=0, column=2, sticky="w")
+        self.type_filter_var = tk.StringVar(value=self._type_options[0])
+        self.type_filter_var.trace_add("write", lambda *_: self._apply_filter())
+        self.type_combo = ttk.Combobox(filter_row, textvariable=self.type_filter_var, values=self._type_options, state="readonly", width=16)
+        self.type_combo.grid(row=0, column=3, sticky="w", padx=(4, 0))
 
         ttk.Label(frm, text="Available").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        ttk.Label(frm, text="Your Team (max 6)").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Label(frm, text=f"Your Team (max {TEAM_SIZE})").grid(row=1, column=2, sticky="w", pady=(6, 0))
 
         self.list_available = tk.Listbox(frm, height=12, exportselection=False)
         self.list_available.grid(row=2, column=0, sticky="nsew")
@@ -603,10 +634,22 @@ class TeamBuilderDialog(tk.Toplevel):
 
     def _apply_filter(self):
         query = (self.search_var.get() or "").strip().lower()
-        if not query:
-            self._filtered = list(self._all_names)
-        else:
-            self._filtered = [n for n in self._all_names if query in n.lower()]
+        names = list(self._all_names)
+        if query:
+            names = [n for n in names if query in n.lower()]
+
+        type_var = getattr(self, "type_filter_var", None)
+        if type_var is not None:
+            selected = (type_var.get() or "").strip()
+            if selected and selected.lower() != "all types":
+                target = selected.lower()
+                names = [
+                    n
+                    for n in names
+                    if any(t.lower() == target for t in self._type_by_name.get(n, []) or [])
+                ]
+
+        self._filtered = names
         self._refresh_available()
 
     def _refresh_available(self):
@@ -648,6 +691,35 @@ class TeamBuilderDialog(tk.Toplevel):
     def _refresh_lists(self):
         self._refresh_available()
         self._refresh_team(self._current_pokemon)
+
+    @staticmethod
+    def _build_type_lookup(stats_df) -> Dict[str, List[str]]:
+        lookup: Dict[str, List[str]] = {}
+        try:
+            type_cols = [col for col in stats_df.columns if "type" in str(col).lower()]
+            records = stats_df.to_dict(orient="records")
+        except Exception:
+            return lookup
+        if not type_cols:
+            return lookup
+        for record in records:
+            name = str(record.get("pokemon") or record.get("name") or record.get("original_name") or "").strip()
+            if not name:
+                continue
+            types: List[str] = []
+            for col in type_cols:
+                value = record.get(col)
+                if value is None:
+                    continue
+                text = str(value).strip()
+                if not text or text.lower() == "nan":
+                    continue
+                formatted = text.title()
+                if formatted not in types:
+                    types.append(formatted)
+            if types:
+                lookup[name] = types
+        return lookup
 
     def _on_team_selection(self, *_):
         idx = self.list_team.curselection()
@@ -841,7 +913,7 @@ class TeamBuilderDialog(tk.Toplevel):
             self._item_by_pokemon.pop(self._current_pokemon, None)
 
     def _add_selected(self):
-        if len(self._team) >= 6:
+        if len(self._team) >= TEAM_SIZE:
             return
         idx = self.list_available.curselection()
         if not idx:
@@ -874,7 +946,7 @@ class TeamBuilderDialog(tk.Toplevel):
         self._refresh_team()
 
     def _done(self):
-        names = list(self._team)[:6]
+        names = list(self._team)[:TEAM_SIZE]
         moves_map = {name: list(self._moves_by_pokemon.get(name, [])[:4]) for name in names}
         ability_map = {name: self._ability_by_pokemon.get(name, "") for name in names if self._ability_by_pokemon.get(name, "")}
         item_map = {name: self._item_by_pokemon.get(name, "") for name in names if self._item_by_pokemon.get(name, "")}

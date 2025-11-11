@@ -86,6 +86,7 @@ class BattleState:
             "ai": self._default_side_state(),
             "player": self._default_side_state(),
         }
+        self.skip_move = {"ai": False, "player": False}
         self.turn_half = 0
         self.turn_count = 0
         self.last_events: List[str] = []
@@ -1260,6 +1261,14 @@ class BattleAI:
         action_type = action.get("type", "attack")
         move: Optional[Move] = action.get("move")
 
+        if getattr(state, "skip_move", None) and side in state.skip_move and state.skip_move[side]:
+            state.skip_move[side] = False
+            events.append(f"{attacker.name} is still getting into position and couldn't move!")
+            self._advance_turn(state, events)
+            state.last_events = events
+            state.last_event = "\n".join(events)
+            return state
+
         if action_type == "switch":
             target_mon = action.get("pokemon")
             if not target_mon or target_mon.is_fainted():
@@ -1511,6 +1520,8 @@ class BattleAI:
             self._apply_secondary_effects(state, attacker, defender, move, events)
         elif defender and defender.is_fainted():
             events.append(f"{defender.name} fainted!")
+            if opp_side and getattr(state, "skip_move", None) and state.turn_half == 0:
+                state.skip_move[opp_side] = True
 
         self._advance_turn(state, events)
         state.last_events = events
@@ -1712,14 +1723,14 @@ class BattleAI:
             return True
         return False
 
-
+    
  
 if __name__ == "__main__":
     from team_builder import generate_balanced_team
 
     stats_df, moves_df, abilities_df = load_local_data()
-    ai_team = generate_balanced_team(stats_df, moves_df, abilities_df, n=6)
-    pl_team = generate_balanced_team(stats_df, moves_df, abilities_df, n=6)
+    ai_team = generate_balanced_team(stats_df, moves_df, abilities_df, n=4)
+    pl_team = generate_balanced_team(stats_df, moves_df, abilities_df, n=4)
 
     state = BattleState(ai_team, pl_team)
     ai = BattleAI(recursion_depth=2)

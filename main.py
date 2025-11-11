@@ -7,9 +7,12 @@ Pass the `--cli` flag to use the console interactive battle loop instead.
 import argparse
 from typing import List
 from data_loader import load_local_data, Move, Pokemon, create_pokemon_from_name
-from team_builder import generate_balanced_team, pick_item
+from team_builder import generate_balanced_team, generate_flowchart_ai_team, pick_item
 from pikalytics_util import fetch_overview
 from battle_ai import BattleAI, BattleState
+
+TEAM_SIZE = 4
+AI_BANNED_MOVES = {"protect"}
 
 def print_team(team, title="Team"):
     """Pretty-print the roster with typing, held items, and move summaries."""
@@ -87,11 +90,11 @@ def run_cli_battle():
     # Prefer CSV compendium if available; else try HTML cache/fetch.
     # Build an allow-list of metagame staples so the AI fields competitively viable threats.
     allowed = set()
+    fmt = "gen9vgc2025regh"
     try:
         # Prefer cached CSV exports first; fall back to HTML parsing only when necessary.
         from pikalytics_util import load_compendium_single_csv, load_compendium_csv, CACHE_DIR
         import os
-        fmt = "gen9vgc2025regh"
         single_csv = os.path.join(CACHE_DIR, f"compendium_{fmt}.csv")
         if os.path.exists(single_csv):
             comp = load_compendium_single_csv(fmt)
@@ -112,10 +115,28 @@ def run_cli_battle():
     except Exception:
         pass
     # Assemble the AI roster using the aggressive item palette so it keeps pressure on the player.
-    ai_team = generate_balanced_team(
-        stats_df, moves_df, abilities_df, n=6, item_style="aggressive",
-        allowed_names=(allowed if allowed else None)
-    )
+    allow_filter = allowed if allowed else None
+    try:
+        ai_team = generate_flowchart_ai_team(
+            stats_df,
+            moves_df,
+            abilities_df,
+            n=TEAM_SIZE,
+            format_slug=fmt,
+            item_style="aggressive",
+            allowed_names=allow_filter,
+            banned_moves=AI_BANNED_MOVES,
+        )
+    except Exception:
+        ai_team = generate_balanced_team(
+            stats_df,
+            moves_df,
+            abilities_df,
+            n=TEAM_SIZE,
+            item_style="aggressive",
+            allowed_names=allow_filter,
+            banned_moves=AI_BANNED_MOVES,
+        )
     player_team = None
     # Parse optional overrides for the player's roster (`--player-team` and `--item-style` flags).
     import sys
@@ -130,7 +151,7 @@ def run_cli_battle():
         # Translate the comma-separated names into Pokemon objects, tolerating typos gracefully.
         chosen = [x.strip() for x in names_arg.split(',') if x.strip()]
         team = []
-        for nm in chosen[:6]:
+        for nm in chosen[:TEAM_SIZE]:
             try:
                 p = create_pokemon_from_name(nm, stats_df, moves_df, abilities_df, preferred_item=pick_item(style))
                 team.append(p)
@@ -139,7 +160,7 @@ def run_cli_battle():
         if team:
             player_team = team
     if player_team is None:
-        player_team = generate_balanced_team(stats_df, moves_df, abilities_df, n=6, item_style="balanced")
+        player_team = generate_balanced_team(stats_df, moves_df, abilities_df, n=TEAM_SIZE, item_style="balanced")
 
     print_team(ai_team, "AI Team (balanced)")
     print()
@@ -163,9 +184,13 @@ def run_cli_battle():
             print(state.last_event)
         if state.is_terminal():
             break
-        # AI PHASE: run the recursive evaluation policy and narrate the selected action.
-        a_action = ai.choose_ai_action(state)
-        print(f"AI chose: {a_action}")
+        # AI PHASE: run the recursive evaluation policy unless it must skip after a forced switch.
+        if getattr(state, "skip_move", {}).get("ai"):
+            a_action = {"type": "skip"}
+            print("AI skips this action while its new Pokémon gets ready.")
+        else:
+            a_action = ai.choose_ai_action(state)
+            print(f"AI chose: {a_action}")
         state = ai.simulate_action(state, attacker=state.active_ai(), defender=state.active_player(), action=a_action, weather_moves=ai.get_weather_moves())
         if getattr(state, 'last_event', None):
             print(state.last_event)
