@@ -664,9 +664,10 @@ class _StructuredTeamBuilder:
     def _try_three_type_branch(self, weaknesses: List[str]) -> None:
         safe_types = self._types_safe_against(weaknesses)
         combos = [combo for combo in combinations(safe_types, 3) if self._types_pairwise_safe(combo)]
+        random.shuffle(combos)
         if not combos:
             return
-        chosen = random.choice(combos)
+        chosen = combos[0]
         for tp in chosen:
             if self._core_complete():
                 break
@@ -692,8 +693,6 @@ class _StructuredTeamBuilder:
             tp = random.choice(pool)
             if not self._core_complete():
                 self._add_random_from_type(tp, limit=15)
-        if not self._core_complete():
-            self._add_from_usage(limit=15, require_unseen=True)
         if not self._core_complete() and len(self.team) >= 2:
             second = self.team[1]
             sec_safe = self._types_safe_against(_weaknesses_for_types(second.type))
@@ -703,6 +702,8 @@ class _StructuredTeamBuilder:
                 if self._core_complete():
                     break
                 self._add_random_from_type(tp, limit=5)
+        if not self._core_complete():
+            self._add_from_usage(limit=15, require_unseen=True)
         if not self._core_complete():
             self._add_from_base_stats(limit=10, require_unseen=True)
 
@@ -766,15 +767,25 @@ def generate_balanced_team(
     item_style: str = "balanced",
     allowed_names: Optional[Set[str]] = None,
     banned_moves: Optional[Set[str]] = None,
+    exclude_names: Optional[Set[str]] = None,
 ) -> Team:
     all_names = list(stats_df["pokemon"].unique())
     if allowed_names is not None:
         all_names = [nm for nm in all_names if nm in allowed_names]
+    if exclude_names:
+        all_names = [nm for nm in all_names if nm not in exclude_names]
+        if not all_names:
+            # If exclusions wipe the pool, relax the exclusion to keep teams buildable.
+            all_names = list(stats_df["pokemon"].unique())
+            if allowed_names is not None:
+                all_names = [nm for nm in all_names if nm in allowed_names]
     random.shuffle(all_names)
     pool_names = all_names[: min(candidate_pool_size, len(all_names))]
 
     candidates: List[Pokemon] = []
     for name in pool_names:
+        if exclude_names and name in exclude_names:
+            continue
         try:
             p = create_pokemon_from_name(name, stats_df, moves_df, abilities_df, preferred_item=pick_item(item_style))
             p.moves = _choose_moves_for_pokemon_advanced(
@@ -809,7 +820,9 @@ def generate_balanced_team(
     while len(team) < n and remaining:
         best_candidate = None
         best_score = float("-inf")
-        for cand in list(remaining):
+        # Evaluate a shuffled subset so repeated builds don't anchor on the same mon (e.g., Tyranitar).
+        sample = random.sample(remaining, min(len(remaining), 12))
+        for cand in sample:
             if cand.name in [p.name for p in team]:
                 continue
             trial = team + [cand]
@@ -821,7 +834,7 @@ def generate_balanced_team(
                     type_counts[t] = type_counts.get(t, 0) + 1
             penalty = sum(max(0, c - 2) for c in type_counts.values()) * 0.2
             score -= penalty
-            score *= (1.0 + (random.random() - 0.5) * 0.05)
+            score *= (1.0 + (random.random() - 0.5) * 0.3)
             if score > best_score:
                 best_score = score
                 best_candidate = cand
